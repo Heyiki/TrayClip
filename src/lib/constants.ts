@@ -11,7 +11,7 @@ export const FALLBACK_BOOTSTRAP: BootstrapPayload = {
         accessibility_prompted: false,
         close_behavior: "hide",
         panel_position: "center",
-        quick_paste: false,
+        quick_paste: 0,
         url_toast: false,
         llm_enabled: false,
         llm_api_url: "",

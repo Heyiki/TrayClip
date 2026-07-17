@@ -187,6 +187,13 @@ struct LlmConfigStore {
     ai_translate: bool,
 }
 
+fn normalize_quick_paste(value: i64) -> i64 {
+    match value {
+        1 | 2 => value,
+        _ => 0,
+    }
+}
+
 pub fn load_settings(conn: &Connection) -> anyhow::Result<AppSettings> {
     let result = conn.query_row(
         "SELECT retention_limit, launch_on_startup, pause_capture, locale, accessibility_prompted, close_behavior, panel_position, quick_paste, url_toast, llm_config FROM app_settings WHERE id = 1",
@@ -202,7 +209,7 @@ pub fn load_settings(conn: &Connection) -> anyhow::Result<AppSettings> {
                 accessibility_prompted: row.get::<_, i64>(4)? == 1,
                 close_behavior: row.get(5)?,
                 panel_position: row.get(6)?,
-                quick_paste: row.get::<_, i64>(7)? == 1,
+                quick_paste: normalize_quick_paste(row.get::<_, i64>(7)?),
                 url_toast: row.get::<_, i64>(8)? == 1,
                 llm_enabled: llm.enabled,
                 llm_api_url: llm.api_url,
@@ -223,10 +230,11 @@ pub fn save_settings(conn: &Connection, settings: &AppSettings) -> anyhow::Resul
         model: settings.llm_model.clone(),
         ai_translate: settings.llm_ai_translate,
     };
+    let quick_paste = normalize_quick_paste(settings.quick_paste);
     let llm_json = serde_json::to_string(&llm_config)?;
     conn.execute(
         "UPDATE app_settings SET retention_limit = ?1, launch_on_startup = ?2, pause_capture = ?3, locale = ?4, accessibility_prompted = ?5, close_behavior = ?6, panel_position = ?7, quick_paste = ?8, url_toast = ?9, llm_config = ?10 WHERE id = 1",
-        params![settings.retention_limit, settings.launch_on_startup as i64, settings.pause_capture as i64, settings.locale, settings.accessibility_prompted as i64, settings.close_behavior, settings.panel_position, settings.quick_paste as i64, settings.url_toast as i64, llm_json],
+        params![settings.retention_limit, settings.launch_on_startup as i64, settings.pause_capture as i64, settings.locale, settings.accessibility_prompted as i64, settings.close_behavior, settings.panel_position, quick_paste, settings.url_toast as i64, llm_json],
     )?;
     let removed_images = cleanup_overflow(conn, settings.retention_limit)?;
     Ok((load_settings(conn)?, removed_images))
@@ -623,6 +631,17 @@ mod tests {
             .collect::<Result<Vec<_>, _>>()
             .unwrap();
         assert_eq!(remaining_ids, vec![2, 3]);
+    }
+
+    #[test]
+    fn load_settings_preserves_copy_after_behavior_values() {
+        let conn = setup_app_conn();
+
+        conn.execute("UPDATE app_settings SET quick_paste = 1 WHERE id = 1", []).unwrap();
+        assert_eq!(load_settings(&conn).unwrap().quick_paste, 1);
+
+        conn.execute("UPDATE app_settings SET quick_paste = 2 WHERE id = 1", []).unwrap();
+        assert_eq!(load_settings(&conn).unwrap().quick_paste, 2);
     }
 
     #[test]

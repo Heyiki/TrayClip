@@ -174,8 +174,12 @@ export function useAppData() {
 
     const handleRecopy = useCallback(async (clipId: number) => {
         await recopyClip(clipId);
-        if (settingsRef.current.quick_paste) {
+        if (settingsRef.current.quick_paste === 1) {
             await hideWindow(true);
+            return;
+        }
+        if (settingsRef.current.quick_paste === 2) {
+            await hideWindow(false);
             return;
         }
         await loadClips();

@@ -41,3 +41,4 @@ openspec/
 .gstack/
 .comet/
 .codegraph/
+.agents/

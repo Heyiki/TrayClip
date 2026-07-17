@@ -15,6 +15,7 @@ import {
 } from "@/components/ui/select";
 import { Button } from "@/components/ui/button";
 import { HotkeyRecorder, DEFAULT_HOTKEYS } from "@/components/HotkeyRecorder";
+import type { QuickPasteBehavior } from "@/lib/types";
 
 const isWindows = typeof navigator !== "undefined" && /Win/.test(navigator.platform ?? navigator.userAgent);
 
@@ -40,12 +41,17 @@ export function SettingsPanel({
   const { t, locale, setLocale } = useTranslation();
   const hotkeyMap = useMemo(() => new Map(hotkeys.map((h) => [h.action_key, h.hotkey_value])), [hotkeys]);
   const [retentionDraft, setRetentionDraft] = useState(() => String(settings.retention_limit));
+  const quickPasteBehavior = isWindows
+      ? settings.quick_paste
+      : settings.quick_paste === 1
+          ? 2
+          : settings.quick_paste;
 
   useEffect(() => {
     setRetentionDraft(String(settings.retention_limit));
   }, [settings.retention_limit]);
 
-  const retentionValue = Math.max(50, Math.min(10000, Number(retentionDraft) || 50));
+  const retentionValue = Math.max(5, Math.min(10000, Number(retentionDraft) || 5));
   const retentionDirty = retentionValue !== settings.retention_limit;
 
   const applyRetentionLimit = () => {
@@ -70,7 +76,7 @@ export function SettingsPanel({
               <Input
                   type="number"
                   className="w-[72px] text-right text-xs"
-                  min={50}
+                  min={5}
                   max={10000}
                   value={retentionDraft}
                   onChange={(e) => setRetentionDraft(e.target.value)}
@@ -104,18 +110,23 @@ export function SettingsPanel({
           </div>
           <Separator />
 
-          {isWindows ? (
-              <>
-                <div className="flex items-center justify-between py-1.5">
-                  <label className="text-[13px] text-foreground/80">{t.quickPaste}</label>
-                  <Switch
-                      checked={settings.quick_paste}
-                      onCheckedChange={(checked) => onSettingsChange({ ...settings, quick_paste: checked })}
-                  />
-                </div>
-                <Separator />
-              </>
-          ) : null}
+          <div className="flex items-center justify-between py-1.5">
+            <label className="text-[13px] text-foreground/80">{t.copyAfterBehavior}</label>
+            <Select
+                value={String(quickPasteBehavior)}
+                onValueChange={(v) => onSettingsChange({ ...settings, quick_paste: Number(v) as QuickPasteBehavior })}
+            >
+              <SelectTrigger className="w-[180px] text-xs">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="0" className="text-xs">{t.copyAfterNone}</SelectItem>
+                {isWindows ? <SelectItem value="1" className="text-xs">{t.copyAfterQuickPaste}</SelectItem> : null}
+                <SelectItem value="2" className="text-xs">{t.copyAfterHideWindow}</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+          <Separator />
 
           <div className="flex items-center justify-between py-1.5">
             <label className="text-[13px] text-foreground/80">{t.urlToast}</label>

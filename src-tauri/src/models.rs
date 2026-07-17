@@ -44,7 +44,7 @@ pub struct AppSettings {
     pub accessibility_prompted: bool,
     pub close_behavior: String,
     pub panel_position: String,
-    pub quick_paste: bool,
+    pub quick_paste: i64,
     pub url_toast: bool,
     #[serde(default)]
     pub llm_enabled: bool,
@@ -68,7 +68,7 @@ impl Default for AppSettings {
             accessibility_prompted: false,
             close_behavior: "hide".into(),
             panel_position: "center".into(),
-            quick_paste: false,
+            quick_paste: 0,
             url_toast: false,
             llm_enabled: false,
             llm_api_url: String::new(),

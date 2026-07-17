@@ -24,6 +24,8 @@ export interface ClipGroup {
   updated_at: string;
 }
 
+export type QuickPasteBehavior = 0 | 1 | 2;
+
 export interface AppSettings {
   retention_limit: number;
   launch_on_startup: boolean;
@@ -32,7 +34,7 @@ export interface AppSettings {
   accessibility_prompted: boolean;
   close_behavior: "hide" | "exit" | "ask";
   panel_position: "center" | "follow_mouse";
-  quick_paste: boolean;
+  quick_paste: QuickPasteBehavior;
   url_toast: boolean;
   llm_enabled: boolean;
   llm_api_url: string;

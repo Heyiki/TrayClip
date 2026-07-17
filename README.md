@@ -39,9 +39,9 @@ English | [简体中文](README_ZH.md)
 
 ## Settings
 
-- Retention limit: 50 to 10000
+- Retention limit: 5 to 10000
 - Pause clipboard capture
-- Quick paste (Windows, paste back to the previous app after copying)
+- Copy after behavior: None / Quick paste / Hide window
 - URL toast
 - Launch on startup
 - Close behavior: hide to tray / exit directly / ask every time

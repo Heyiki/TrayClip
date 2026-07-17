@@ -34,9 +34,9 @@ TrayClip is a local clipboard manager built around history, grouping, pinning, q
 
 ## Settings
 - Hotkeys: customize the main window hotkey, then restore the default when needed.
-- Retention limit: set the maximum number of retained records from 50 to 10000.
+- Retention limit: set the maximum number of retained records from 5 to 10000.
 - Pause capture: temporarily stop clipboard capture.
-- Quick paste: Windows only, automatically paste to the previous app window after copying from the main window.
+- Copy after behavior: choose None, Quick paste, or Hide window. Windows shows all three options; non-Windows shows None and Hide window.
 - URL toast: show a toast notification when copied content contains a URL.
 - Launch on startup: start TrayClip automatically when the system starts.
 - Close behavior: choose hide to tray, exit directly, or ask every time.
