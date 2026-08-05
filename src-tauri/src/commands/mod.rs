@@ -432,9 +432,23 @@ pub fn show_url_toast(app: AppHandle, url: String) -> Result<(), String> {
 
 // --- Bing Translate ---
 
+const EDGE_TRANSLATE_URL: &str = "https://edge.microsoft.com/translate/translatetext";
+
+const EDGE_TRANSLATE_HEADERS: &[(&str, &str)] = &[
+    ("Accept", "application/json, text/plain, */*"),
+    ("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36 Edg/131.0.0.0"),
+    ("pragma", "no-cache"),
+    ("priority", "u=1, i"),
+    ("x-edge-shopping-flag", "1"),
+    ("content-type", "application/json"),
+];
+
+#[allow(dead_code)]
 const BING_AUTH_URL: &str = "https://edge.microsoft.com/translate/auth";
+#[allow(dead_code)]
 const BING_TRANSLATE_URL: &str = "https://api-edge.cognitive.microsofttranslator.com/translate";
 
+#[allow(dead_code)]
 const BING_COMMON_HEADERS: &[(&str, &str)] = &[
     ("Accept", "application/json, text/plain, */*"),
     ("Accept-Language", "zh-CN"),
@@ -447,13 +461,16 @@ const BING_COMMON_HEADERS: &[(&str, &str)] = &[
     ("Sec-Fetch-Dest", "empty"),
 ];
 
+#[allow(dead_code)]
 struct BingTokenCache {
     token: String,
     expiry: std::time::Instant,
 }
 
+#[allow(dead_code)]
 static BING_TOKEN: std::sync::OnceLock<std::sync::Mutex<BingTokenCache>> = std::sync::OnceLock::new();
 
+#[allow(dead_code)]
 async fn get_bing_token(client: &reqwest::Client) -> Result<String, String> {
     let cache = BING_TOKEN.get_or_init(|| std::sync::Mutex::new(BingTokenCache {
         token: String::new(),
@@ -490,25 +507,20 @@ async fn get_bing_token(client: &reqwest::Client) -> Result<String, String> {
 #[tauri::command]
 pub async fn bing_translate(text: String, from: String, to: String) -> Result<String, String> {
     let client = reqwest::Client::new();
-    let token = get_bing_token(&client).await?;
-
     let mut params = vec![
-        ("to", to),
-        ("api-version", "3.0".into()),
-        ("includeSentenceLength", "true".into()),
+        ("to", to.as_str()),
+        ("isEnterpriseClient", "false"),
     ];
     if !from.is_empty() && from != "auto" {
-        params.push(("from", from));
+        params.push(("from", from.as_str()));
     }
 
-    let mut req = client.post(BING_TRANSLATE_URL).query(&params);
-    for (k, v) in BING_COMMON_HEADERS {
+    let mut req = client.post(EDGE_TRANSLATE_URL).query(&params);
+    for (k, v) in EDGE_TRANSLATE_HEADERS {
         req = req.header(*k, *v);
     }
     let resp = req
-        .header("Content-Type", "application/json")
-        .header("Authorization", format!("Bearer {}", token))
-        .json(&serde_json::json!([{"Text": text}]))
+        .json(&serde_json::json!([text]))
         .send()
         .await
         .map_err(|e| format!("Bing translate request failed: {}", e))?;
