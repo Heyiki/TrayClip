@@ -1,0 +1,94 @@
+name: Test Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      branch:
+        description: Branch to build
+        required: false
+        default: test
+        type: string
+  push:
+    branches:
+      - test
+
+permissions:
+  contents: write
+
+concurrency:
+  group: test-release-${{ inputs.branch || github.ref_name }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: windows-latest
+            target: x86_64-pc-windows-msvc
+            args: --bundles nsis
+          - platform: macos-latest
+            target: aarch64-apple-darwin
+            args: --bundles dmg
+          - platform: macos-latest
+            target: x86_64-apple-darwin
+            args: --bundles dmg
+          - platform: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            args: --bundles appimage,deb,rpm
+
+    runs-on: ${{ matrix.platform }}
+
+    steps:
+      - name: Check out source branch
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.branch || github.ref }}
+
+      - name: Read application version
+        id: metadata
+        shell: bash
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          COMMIT=$(git rev-parse HEAD)
+          TAG="test-v${VERSION}-${GITHUB_RUN_NUMBER}-${COMMIT::7}"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "commit=${COMMIT}" >> "$GITHUB_OUTPUT"
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@v1
+        with:
+          toolchain: stable
+          targets: ${{ matrix.target }}
+
+      - name: Install dependencies (Ubuntu)
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libxcb1-dev libxcb-xfixes0-dev
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Build test release
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: ${{ steps.metadata.outputs.tag }}
+          releaseCommitish: ${{ steps.metadata.outputs.commit }}
+          releaseName: TrayClip Test ${{ steps.metadata.outputs.tag }}
+          releaseBody: |
+            Automated test release from `${{ inputs.branch || github.ref_name }}`.
+            Commit: `${{ steps.metadata.outputs.commit }}`
+          releaseDraft: false
+          prerelease: true
+          args: --target ${{ matrix.target }} ${{ matrix.args }}
