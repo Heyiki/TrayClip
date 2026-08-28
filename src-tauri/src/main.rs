@@ -201,11 +201,21 @@ fn setup_tray(app: &tauri::App) -> anyhow::Result<()> {
     let quit_item = MenuItemBuilder::new("退出").id("quit").build(app)?;
     let menu = MenuBuilder::new(app).items(&[&show_item, &quit_item]).build()?;
 
-    let tray = TrayIconBuilder::new()
-        .icon(app.default_window_icon().unwrap().clone())
-        .icon_as_template(false)
+    #[cfg(target_os = "macos")]
+    let tray_icon = tauri::image::Image::from_bytes(include_bytes!("../icons/tray-template.png"))
+        .context("failed to load macOS tray template icon")?;
+
+    #[cfg(not(target_os = "macos"))]
+    let tray_icon = app
+        .default_window_icon()
+        .cloned()
+        .context("default window icon is missing")?;
+
+    let tray_builder = TrayIconBuilder::with_id("main")
+        .icon(tray_icon)
         .menu(&menu)
         .tooltip("TrayClip")
+        .show_menu_on_left_click(false)
         .on_tray_icon_event(|tray, event| {
             if let TrayIconEvent::Click {
                 button: MouseButton::Left,
@@ -226,8 +236,12 @@ fn setup_tray(app: &tauri::App) -> anyhow::Result<()> {
                 }
                 _ => {}
             }
-        })
-        .build(app)?;
+        });
+
+    #[cfg(target_os = "macos")]
+    let tray_builder = tray_builder.icon_as_template(true);
+
+    let tray = tray_builder.build(app)?;
 
     *app.state::<TrayState>().tray.lock() = Some(tray);
 
@@ -310,7 +324,8 @@ fn main() {
 
             // Hide Dock icon on macOS — keep only the menu bar tray icon
             #[cfg(target_os = "macos")]
-            app.set_activation_policy(tauri::ActivationPolicy::Accessory);
+            app.set_activation_policy(tauri::ActivationPolicy::Accessory)
+                .context("failed to set macOS accessory activation policy")?;
 
             if let Some(window) = app.get_webview_window("main") {
                 let w = window.clone();
