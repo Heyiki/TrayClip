@@ -84,7 +84,7 @@ export function TranslateDialog({
 
   return (
       <Dialog open onOpenChange={(open) => { if (!open) onClose(); }}>
-        <DialogContent className="max-w-[360px]" onDoubleClick={(e) => e.stopPropagation()} onPointerDownOutside={(e) => e.preventDefault()} onEscapeKeyDown={(e) => e.preventDefault()}>
+        <DialogContent className="max-w-[360px]" onContextMenu={(e) => e.stopPropagation()} onDoubleClick={(e) => e.stopPropagation()} onPointerDownOutside={(e) => e.preventDefault()} onEscapeKeyDown={(e) => e.preventDefault()}>
           <DialogHeader>
             <DialogTitle className="flex items-center gap-1.5 text-sm">
               <Languages className="h-4 w-4" /> {t.translate}

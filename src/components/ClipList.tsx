@@ -13,6 +13,7 @@ interface ClipListProps {
     onPinToggle: (clipId: number, pinned: boolean) => void;
     onMoveGroup: (clipId: number, groupId: number | null) => void;
     onDelete: (clipId: number) => void;
+    onLoadMore?: () => Promise<void>;
     scrollResetKey: number;
 }
 
@@ -25,6 +26,7 @@ export function ClipList({
                              onPinToggle,
                              onMoveGroup,
                              onDelete,
+                             onLoadMore,
                              scrollResetKey,
                          }: ClipListProps) {
     const { t } = useTranslation();
@@ -52,6 +54,19 @@ export function ClipList({
         selectedIndexRef.current = -1;
         virtualizer.scrollToIndex(0, { align: "start" });
     }, [scrollResetKey]);
+
+    useEffect(() => {
+        if (!onLoadMore) return;
+        const element = scrollElement.current;
+        if (!element) return;
+        const handleScroll = () => {
+            const distanceToBottom = element.scrollHeight - element.scrollTop - element.clientHeight;
+            if (distanceToBottom < 240) void onLoadMore();
+        };
+        element.addEventListener("scroll", handleScroll, { passive: true });
+        handleScroll();
+        return () => element.removeEventListener("scroll", handleScroll);
+    }, [clips.length, onLoadMore, scrollElement]);
 
     useEffect(() => {
         const handleKeydown = (e: KeyboardEvent) => {

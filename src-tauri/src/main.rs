@@ -376,6 +376,7 @@ fn main() {
             commands::list_clips,
             commands::list_groups,
             commands::recopy_clip,
+            commands::recopy_image,
             commands::pin_toggle,
             commands::save_group,
             commands::delete_group,

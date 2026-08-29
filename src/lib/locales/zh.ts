@@ -38,6 +38,13 @@ export const zh = {
   // ClipCard
   moreFiles: (n: number) => `及其他 ${n} 个文件`,
   emptyRecords: "暂无记录",
+  imagePreview: "图片预览",
+  imagePreviewUnavailable: "图片无法预览",
+  imagePreviewCount: (current: number, total: number) => `${current} / ${total}`,
+  previousImage: "上一张图片",
+  nextImage: "下一张图片",
+  copyImage: "复制图片",
+  copyImageFailed: "复制图片失败",
 
   // 分组选择
   searchGroup: "搜索分组",

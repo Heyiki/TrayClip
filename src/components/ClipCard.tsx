@@ -1,5 +1,5 @@
 import { memo, useCallback, useMemo, useState } from "react";
-import { Copy, Pin, PinOff, Trash2 } from "lucide-react";
+import { Copy, Expand, Pin, PinOff, Trash2 } from "lucide-react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import type { AppSettings, ClipGroup, ClipRecord } from "@/lib/types";
 import { useTranslation } from "@/lib/i18n";
@@ -17,6 +17,8 @@ import {
 import { GroupSelect } from "@/components/GroupSelect";
 import { LLMResultDialog } from "@/components/LLMResultDialog";
 import { TranslateDialog } from "@/components/TranslateDialog";
+import { ImagePreviewDialog } from "@/components/ImagePreviewDialog";
+import { recopyImage } from "@/lib/api";
 
 const IMAGE_EXTENSIONS = new Set([
   ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp", ".ico", ".tiff", ".tif", ".svg",
@@ -28,15 +30,23 @@ function isImagePath(path: string): boolean {
   return IMAGE_EXTENSIONS.has(path.slice(dot).toLowerCase());
 }
 
-function FileThumb({ path }: { path: string }) {
+function FileThumb({ path, onClick }: { path: string; onClick: () => void }) {
   const thumbSrc = useImagePreview(path);
   return (
-      <img
-          className="h-9 w-11 rounded-sm object-cover"
-          src={thumbSrc ?? undefined}
-          alt={path.split(/[/\\]/).pop() ?? "image"}
-          onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
-      />
+      <button
+          type="button"
+          className="cursor-zoom-in rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          onClick={(event) => { event.stopPropagation(); onClick(); }}
+          onDoubleClick={(event) => event.stopPropagation()}
+          title={path.split(/[/\\]/).pop() ?? "image"}
+      >
+        <img
+            className="h-9 w-11 rounded-sm object-cover"
+            src={thumbSrc ?? undefined}
+            alt={path.split(/[/\\]/).pop() ?? "image"}
+            onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
+        />
+      </button>
   );
 }
 
@@ -101,6 +111,32 @@ export const ClipCard = memo(function ClipCard({
   const otherPaths = useMemo(() => isFilePaths ? clip.file_paths.filter((p) => !isImagePath(p)) : [], [isFilePaths, clip.file_paths]);
   const singleImage = imagePaths.length === 1 && otherPaths.length === 0;
   const clipImageSrc = useImagePreview(clip.content_type === "image" ? clip.image_path : null);
+  const [previewOpen, setPreviewOpen] = useState(false);
+  const [previewIndex, setPreviewIndex] = useState(0);
+  const [copyError, setCopyError] = useState<string | null>(null);
+  const previewPaths = useMemo(
+      () => clip.content_type === "image" && clip.image_path ? [clip.image_path] : imagePaths,
+      [clip.content_type, clip.image_path, imagePaths],
+  );
+  const previewSrc = useImagePreview(previewOpen ? previewPaths[previewIndex] : null);
+
+  const openPreview = useCallback((index: number) => {
+    setPreviewIndex(index);
+    setCopyError(null);
+    setPreviewOpen(true);
+  }, []);
+
+  const copyPreviewImage = useCallback(() => {
+    const filePath = previewPaths[previewIndex];
+    if (!filePath) return;
+    setCopyError(null);
+    void recopyImage(filePath)
+        .then(() => setPreviewOpen(false))
+        .catch((error) => {
+          console.error("[TrayClip] failed to copy preview image:", error);
+          setCopyError(t.copyImageFailed);
+        });
+  }, [previewIndex, previewPaths, t.copyImageFailed]);
 
   const { llmState, enabled: llmEnabled, config: llmConfig, close: closeLlmDialog, handleExtractKeywords, handleSummarize } = useClipLlm(settings);
   const [translateOpen, setTranslateOpen] = useState(false);
@@ -164,16 +200,30 @@ export const ClipCard = memo(function ClipCard({
 
               {/* Content */}
               {clip.content_type === "image" && clip.image_path ? (
-                  <img
-                      className="my-0.5 max-h-[56px] rounded-sm object-contain"
-                      src={clipImageSrc ?? undefined}
-                      alt="clipboard image"
-                  />
+                  <button
+                      type="button"
+                      className="group/image relative my-0.5 block max-w-full cursor-zoom-in rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                      title={t.imagePreview}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        openPreview(0);
+                      }}
+                      onDoubleClick={(event) => event.stopPropagation()}
+                  >
+                    <img
+                        className="max-h-[56px] max-w-full rounded-sm object-contain"
+                        src={clipImageSrc ?? undefined}
+                        alt={t.imagePreview}
+                    />
+                    <span className="pointer-events-none absolute right-1 top-1 inline-flex h-5 w-5 items-center justify-center rounded bg-black/55 text-white opacity-0 transition-opacity group-hover/image:opacity-100">
+                      <Expand className="h-3 w-3" />
+                    </span>
+                  </button>
               ) : null}
               {isFilePaths && imagePaths.length > 0 ? (
                   <div className="my-0.5 flex gap-1.5 overflow-hidden">
-                    {imagePaths.slice(0, 2).map((path) => (
-                        <FileThumb key={path} path={path} />
+                    {imagePaths.slice(0, 2).map((path, index) => (
+                        <FileThumb key={path} path={path} onClick={() => openPreview(index)} />
                     ))}
                   </div>
               ) : null}
@@ -232,6 +282,20 @@ export const ClipCard = memo(function ClipCard({
             </div>
 
             {/* LLM Dialog */}
+            {previewPaths.length > 0 ? (
+                <ImagePreviewDialog
+                    open={previewOpen}
+                    src={previewSrc}
+                    index={previewIndex}
+                    total={previewPaths.length}
+                    onOpenChange={setPreviewOpen}
+                    onPrevious={() => setPreviewIndex((current) => Math.max(0, current - 1))}
+                    onNext={() => setPreviewIndex((current) => Math.min(previewPaths.length - 1, current + 1))}
+                    onCopy={copyPreviewImage}
+                    copyError={copyError}
+                />
+            ) : null}
+
             {(llmState.loading || llmState.result || llmState.error) && (
                 <LLMResultDialog
                     loading={llmState.loading}

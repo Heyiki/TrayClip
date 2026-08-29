@@ -7,6 +7,7 @@ export const listClips = (payload: ListClipsRequest) => invoke<ListClipsResponse
 export const listGroups = () => invoke<ClipGroup[]>("list_groups");
 export const pinToggle = (clipId: number, pinned: boolean) => invoke("pin_toggle", { clipId, pinned });
 export const recopyClip = (clipId: number) => invoke("recopy_clip", { clipId });
+export const recopyImage = (filePath: string) => invoke("recopy_image", { filePath });
 export const saveGroup = (groupId: number | null, groupName: string) => invoke<ClipGroup>("save_group", { groupId, groupName });
 export const deleteGroup = (groupId: number) => invoke("delete_group", { groupId });
 export const moveClipToGroup = (clipId: number, groupId: number | null) => invoke("move_clip_to_group", { clipId, groupId });

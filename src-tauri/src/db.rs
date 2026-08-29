@@ -375,20 +375,19 @@ pub fn list_clips(conn: &Connection, request: &ListClipsRequest) -> anyhow::Resu
     let page_size = request.page_size.clamp(1, 100);
     let offset = (page - 1) * page_size;
     let keyword = request.keyword.clone().unwrap_or_default().to_lowercase();
-    let like_keyword = format!("%{}%", keyword);
     let group_id = request.group_id;
     let pinned_only = request.pinned_only.unwrap_or(false) as i64;
 
     let total: i64 = conn.query_row(
-        "SELECT COUNT(*) FROM clips WHERE (?1 = '' OR LOWER(COALESCE(plain_text, '') || ' ' || summary) LIKE ?2) AND (?3 IS NULL OR group_id = ?3) AND (?4 = 0 OR is_pinned = 1)",
-        params![keyword, like_keyword, group_id, pinned_only],
+        "SELECT COUNT(*) FROM clips WHERE (?1 = '' OR instr(LOWER(COALESCE(plain_text, '') || ' ' || summary || ' ' || COALESCE(source_app, '') || ' ' || COALESCE(file_paths_json, '')), ?1) > 0) AND (?2 IS NULL OR group_id = ?2) AND (?3 = 0 OR is_pinned = 1)",
+        params![keyword, group_id, pinned_only],
         |row| row.get(0),
     )?;
 
     let mut statement = conn.prepare(
-        "SELECT id, content_type, plain_text, rich_text, summary, image_path, file_paths_json, source_app, is_pinned, is_truncated, group_id, created_at, updated_at, last_used_at FROM clips WHERE (?1 = '' OR LOWER(COALESCE(plain_text, '') || ' ' || summary) LIKE ?2) AND (?3 IS NULL OR group_id = ?3) AND (?4 = 0 OR is_pinned = 1) ORDER BY is_pinned DESC, position_updated_at DESC, id DESC LIMIT ?5 OFFSET ?6",
+        "SELECT id, content_type, plain_text, rich_text, summary, image_path, file_paths_json, source_app, is_pinned, is_truncated, group_id, created_at, updated_at, last_used_at FROM clips WHERE (?1 = '' OR instr(LOWER(COALESCE(plain_text, '') || ' ' || summary || ' ' || COALESCE(source_app, '') || ' ' || COALESCE(file_paths_json, '')), ?1) > 0) AND (?2 IS NULL OR group_id = ?2) AND (?3 = 0 OR is_pinned = 1) ORDER BY is_pinned DESC, position_updated_at DESC, id DESC LIMIT ?4 OFFSET ?5",
     )?;
-    let rows = statement.query_map(params![keyword, like_keyword, group_id, pinned_only, page_size, offset], map_clip)?;
+    let rows = statement.query_map(params![keyword, group_id, pinned_only, page_size, offset], map_clip)?;
     let items = rows.collect::<Result<Vec<_>, _>>()?;
 
     Ok(ListClipsResponse {
@@ -642,6 +641,28 @@ mod tests {
 
         conn.execute("UPDATE app_settings SET quick_paste = 2 WHERE id = 1", []).unwrap();
         assert_eq!(load_settings(&conn).unwrap().quick_paste, 2);
+    }
+
+    #[test]
+    fn list_clips_searches_content_source_and_file_paths() {
+        let conn = setup_app_conn();
+        conn.execute(
+            "INSERT INTO clips(id, content_type, plain_text, rich_text, summary, image_path, file_paths_json, source_app, is_pinned, is_truncated, group_id, created_at, updated_at, last_used_at, content_hash, position_updated_at)
+             VALUES
+             (1, 'plain_text', 'alpha', NULL, 'first', NULL, '[]', 'Editor', 0, 0, NULL, '2024-01-01T00:00:00Z', '2024-01-01T00:00:00Z', NULL, 'hash-1', '2024-01-01T00:00:00Z'),
+             (2, 'file_paths', NULL, NULL, 'second', NULL, '[\"D:/docs/report.txt\"]', 'Explorer', 0, 0, NULL, '2024-01-01T00:00:01Z', '2024-01-01T00:00:01Z', NULL, 'hash-2', '2024-01-01T00:00:01Z'),
+             (3, 'plain_text', 'third', NULL, 'third', NULL, '[]', 'Terminal', 0, 0, NULL, '2024-01-01T00:00:02Z', '2024-01-01T00:00:02Z', NULL, 'hash-3', '2024-01-01T00:00:02Z')",
+            [],
+        )
+        .unwrap();
+
+        let source_match = list_clips(&conn, &ListClipsRequest { page: 1, page_size: 100, keyword: Some("explorer".into()), group_id: None, pinned_only: None }).unwrap();
+        assert_eq!(source_match.total, 1);
+        assert_eq!(source_match.items[0].id, 2);
+
+        let path_match = list_clips(&conn, &ListClipsRequest { page: 1, page_size: 100, keyword: Some("report.txt".into()), group_id: None, pinned_only: None }).unwrap();
+        assert_eq!(path_match.total, 1);
+        assert_eq!(path_match.items[0].id, 2);
     }
 
     #[test]

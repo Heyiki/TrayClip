@@ -35,6 +35,11 @@ export function useAppData() {
     const settingsRef = useRef(state.settings);
     const selectedGroupIdRef = useRef(selectedGroupId);
     const isDragging = useRef(false);
+    const clipsPageRef = useRef(1);
+    const clipsHasMoreRef = useRef(false);
+    const clipsLoadingRef = useRef(false);
+    const clipsRequestIdRef = useRef(0);
+    const clipsKeywordRef = useRef("");
 
     // Keep refs in sync
     useEffect(() => { settingsRef.current = state.settings; }, [state.settings]);
@@ -58,28 +63,80 @@ export function useAppData() {
         } catch { /* ignore */ }
     }, []);
 
-    const loadClips = useCallback(async (groupId?: number | null) => {
+    const loadClips = useCallback(async (groupId?: number | null, keyword?: string) => {
+        const requestId = ++clipsRequestIdRef.current;
+        clipsLoadingRef.current = true;
         try {
             const gid = groupId === undefined ? selectedGroupIdRef.current : groupId;
-            const clips = await listClips({ page: 1, page_size: 100, group_id: gid ?? undefined });
+            const query = keyword === undefined ? clipsKeywordRef.current : keyword.trim();
+            clipsKeywordRef.current = query;
+            const clips = await listClips({ page: 1, page_size: 100, keyword: query || undefined, group_id: gid ?? undefined });
+            if (requestId !== clipsRequestIdRef.current) return;
+            clipsPageRef.current = 1;
+            clipsHasMoreRef.current = clips.has_more;
             setState((prev) => ({ ...prev, clips }));
         } catch { /* ignore */ }
+        finally {
+            if (requestId === clipsRequestIdRef.current) clipsLoadingRef.current = false;
+        }
+    }, []);
+
+    const loadMoreClips = useCallback(async () => {
+        if (clipsLoadingRef.current || !clipsHasMoreRef.current) return;
+        const requestId = clipsRequestIdRef.current;
+        const nextPage = clipsPageRef.current + 1;
+        const gid = selectedGroupIdRef.current;
+        clipsLoadingRef.current = true;
+        try {
+            const nextClips = await listClips({
+                page: nextPage,
+                page_size: 100,
+                keyword: clipsKeywordRef.current || undefined,
+                group_id: gid ?? undefined,
+            });
+            if (requestId !== clipsRequestIdRef.current) return;
+            clipsPageRef.current = nextPage;
+            clipsHasMoreRef.current = nextClips.has_more;
+            setState((prev) => ({
+                ...prev,
+                clips: {
+                    items: [...prev.clips.items, ...nextClips.items],
+                    total: nextClips.total,
+                    has_more: nextClips.has_more,
+                },
+            }));
+        } catch { /* ignore */ }
+        finally {
+            if (requestId === clipsRequestIdRef.current) clipsLoadingRef.current = false;
+        }
     }, []);
 
     const loadAll = useCallback(async () => {
+        const requestId = ++clipsRequestIdRef.current;
+        clipsLoadingRef.current = true;
         for (let i = 0; i < 3; i++) {
             try {
                 const [cfg, groups, clips] = await Promise.all([
                     getConfig(),
                     listGroups(),
-                    listClips({ page: 1, page_size: 100, group_id: selectedGroupIdRef.current ?? undefined }),
+                    listClips({
+                        page: 1,
+                        page_size: 100,
+                        keyword: clipsKeywordRef.current || undefined,
+                        group_id: selectedGroupIdRef.current ?? undefined,
+                    }),
                 ]);
+                if (requestId !== clipsRequestIdRef.current) return;
+                clipsPageRef.current = 1;
+                clipsHasMoreRef.current = clips.has_more;
                 setState({ ...cfg, groups, clips });
+                clipsLoadingRef.current = false;
                 return;
             } catch {
                 if (i < 2) await new Promise((r) => setTimeout(r, 100));
             }
         }
+        if (requestId === clipsRequestIdRef.current) clipsLoadingRef.current = false;
     }, []);
 
     // Startup: load everything, then show window
@@ -204,6 +261,7 @@ export function useAppData() {
         isDragging,
         loadConfig,
         loadClips,
+        loadMoreClips,
         loadAll,
         saveSettings,
         createGroup,

@@ -91,21 +91,30 @@ impl<R: Runtime> ClipboardHandler for Monitor<R> {
 
         // Ingest into DB only when content actually changed
         if last_signature.as_ref() != Some(&signature) {
-            let cleanup_images = {
-                let conn = state.pool.get();
-                match conn {
-                    Ok(conn) => db::ingest_clip(&conn, &settings, clip).unwrap_or_default(),
-                    Err(e) => {
-                        eprintln!("[clipboard-monitor] failed to get db connection: {}", e);
-                        Vec::new()
-                    }
+            let mut ingest_result = Err(anyhow::anyhow!("clipboard ingest did not run"));
+            for attempt in 0..3 {
+                ingest_result = match state.pool.get() {
+                    Ok(conn) => db::ingest_clip(&conn, &settings, clip.clone()),
+                    Err(e) => Err(anyhow::anyhow!("failed to get db connection: {}", e)),
+                };
+                if ingest_result.is_ok() || attempt == 2 {
+                    break;
                 }
-            };
-            for image in cleanup_images {
-                let _ = std::fs::remove_file(image);
+                std::thread::sleep(std::time::Duration::from_millis(100));
             }
-            *last_signature = Some(signature);
-            let _ = self.app.emit("clips://updated", ());
+
+            match ingest_result {
+                Ok(cleanup_images) => {
+                    for image in cleanup_images {
+                        let _ = std::fs::remove_file(image);
+                    }
+                    *last_signature = Some(signature);
+                    let _ = self.app.emit("clips://updated", ());
+                }
+                Err(e) => {
+                    eprintln!("[clipboard-monitor] failed to ingest clipboard content: {}", e);
+                }
+            }
         }
 
         CallbackResult::Next

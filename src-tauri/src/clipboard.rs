@@ -181,6 +181,31 @@ pub fn write_clipboard_with_state(record: &ClipRecord, clipboard: &mut Clipboard
     write_clipboard_with_clipboard(record, clipboard)
 }
 
+#[cfg(not(target_os = "linux"))]
+pub fn write_image_path(file_path: &str) -> anyhow::Result<()> {
+    let mut clipboard = Clipboard::new().context("failed to open clipboard")?;
+    write_image_path_with_clipboard(file_path, &mut clipboard)
+}
+
+#[cfg(target_os = "linux")]
+pub fn write_image_path_with_state(file_path: &str, clipboard: &mut Clipboard) -> anyhow::Result<()> {
+    write_image_path_with_clipboard(file_path, clipboard)
+}
+
+fn write_image_path_with_clipboard(file_path: &str, clipboard: &mut Clipboard) -> anyhow::Result<()> {
+    let image = image::open(file_path)
+        .with_context(|| format!("failed to open image: {}", file_path))?
+        .into_rgba8();
+    let width = image.width() as usize;
+    let height = image.height() as usize;
+    clipboard.set_image(ImageData {
+        width,
+        height,
+        bytes: Cow::Owned(image.into_vec()),
+    })?;
+    Ok(())
+}
+
 fn write_clipboard_with_clipboard(record: &ClipRecord, clipboard: &mut Clipboard) -> anyhow::Result<()> {
     match record.content_type {
         ClipContentType::PlainText | ClipContentType::RichText => {
