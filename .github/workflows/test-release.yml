@@ -78,6 +78,14 @@ jobs:
       - name: Install frontend dependencies
         run: npm ci
 
+      - name: Verify Windows installer icon
+        if: matrix.platform == 'windows-latest'
+        shell: pwsh
+        run: |
+          if (-not (Test-Path "src-tauri/icons/icon.ico")) {
+            throw "Missing Windows installer icon: src-tauri/icons/icon.ico"
+          }
+
       - name: Build test release
         uses: tauri-apps/tauri-action@v0
         env:
@@ -92,3 +100,23 @@ jobs:
           releaseDraft: false
           prerelease: true
           args: --target ${{ matrix.target }} ${{ matrix.args }}
+
+  cleanup-test-releases:
+    needs: build
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Keep only recent test releases
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          gh release list \
+            --repo "${GITHUB_REPOSITORY}" \
+            --limit 100 \
+            --json tagName,isPrerelease,createdAt \
+            --jq '[.[] | select(.isPrerelease and (.tagName | startswith("test-v")))] | sort_by(.createdAt) | reverse | .[5:][] | .tagName' \
+          | while IFS= read -r tag; do
+              [ -z "$tag" ] && continue
+              echo "Deleting old test release: $tag"
+              gh release delete "$tag" --repo "${GITHUB_REPOSITORY}" --yes --cleanup-tag
+            done

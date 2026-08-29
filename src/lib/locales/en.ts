@@ -35,6 +35,13 @@ export const en: typeof zh = {
 
   moreFiles: (n: number) => `and ${n} more files`,
   emptyRecords: "No records",
+  imagePreview: "Image preview",
+  imagePreviewUnavailable: "Image unavailable",
+  imagePreviewCount: (current: number, total: number) => `${current} / ${total}`,
+  previousImage: "Previous image",
+  nextImage: "Next image",
+  copyImage: "Copy image",
+  copyImageFailed: "Failed to copy image",
 
   searchGroup: "Search groups",
   ungrouped: "All",

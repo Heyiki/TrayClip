@@ -19,13 +19,13 @@ jobs:
             args: --bundles nsis
           - platform: macos-latest
             target: aarch64-apple-darwin
-            args: ""
+            args: --bundles dmg
           - platform: macos-latest
             target: x86_64-apple-darwin
-            args: ""
+            args: --bundles dmg
           - platform: ubuntu-22.04
             target: x86_64-unknown-linux-gnu
-            args: ""
+            args: --bundles appimage,deb,rpm
 
     runs-on: ${{ matrix.platform }}
 
@@ -53,6 +53,14 @@ jobs:
       - name: Install frontend dependencies
         run: npm ci
 
+      - name: Verify Windows installer icon
+        if: matrix.platform == 'windows-latest'
+        shell: pwsh
+        run: |
+          if (-not (Test-Path "src-tauri/icons/icon.ico")) {
+            throw "Missing Windows installer icon: src-tauri/icons/icon.ico"
+          }
+
       - name: Build
         uses: tauri-apps/tauri-action@v0
         env:
@@ -64,23 +72,3 @@ jobs:
           releaseDraft: true
           prerelease: false
           args: --target ${{ matrix.target }} ${{ matrix.args }}
-
-      - name: Remove unwanted Linux bundle files
-        if: matrix.platform == 'ubuntu-22.04'
-        continue-on-error: true
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          RELEASE_ID=$(gh api repos/${{ github.repository }}/releases/tags/${{ github.ref_name }} --jq '.id') || exit 0
-          gh api repos/${{ github.repository }}/releases/$RELEASE_ID/assets --paginate --jq '.[] | "\(.id) \(.name)"' | while read id name; do
-            case "$name" in
-              *.AppImage|*.deb|*.rpm|*.exe|*.dmg|*.AppImage.tar.gz|*.AppImage.zsync)
-                echo "KEEP: $name"
-                ;;
-              *)
-                echo "DELETE: $name"
-                gh api -X DELETE repos/${{ github.repository }}/releases/assets/$id || true
-                ;;
-            esac
-          done
-        shell: bash

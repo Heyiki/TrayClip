@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, useDeferredValue } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { emit } from "@tauri-apps/api/event";
 import { getVersion } from "@tauri-apps/api/app";
 import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -13,6 +13,7 @@ import { useTranslation } from "@/lib/i18n";
 import { useConfirmDialog } from "@/hooks/useConfirmDialog";
 import { useAppData } from "@/hooks/useAppData";
 import { useAppEvents } from "@/hooks/useAppEvents";
+import { useDebouncedValue } from "@/hooks/useDebouncedValue";
 import { WindowBar } from "@/components/WindowBar";
 import { GroupBar } from "@/components/GroupBar";
 import { ClipList } from "@/components/ClipList";
@@ -123,6 +124,9 @@ export default function App() {
 
   // UI state
   const [search, setSearch] = useState("");
+  const debouncedSearch = useDebouncedValue(search, 250);
+  const [searchResetKey, setSearchResetKey] = useState(0);
+  const previousSearchRef = useRef("");
   const [activeTab, setActiveTab] = useState<TabKey>("clips");
   const [theme, setTheme] = useState<"light" | "dark">(() => {
     return (localStorage.getItem("trayclip-theme") as "light" | "dark") || "light";
@@ -162,17 +166,12 @@ export default function App() {
     void emit("theme://changed", theme);
   }, [theme]);
 
-  // Search filtering
-  const filteredClips = useMemo(() => {
-    if (!search) return data.state.clips.items;
-    const q = search.toLowerCase();
-    return data.state.clips.items.filter((clip) =>
-        `${clip.summary} ${clip.plain_text ?? ""} ${clip.source_app} ${clip.file_paths.join(" ")}`
-            .toLowerCase()
-            .includes(q)
-    );
-  }, [search, data.state.clips.items]);
-  const deferredClips = useDeferredValue(filteredClips);
+  // Search is performed by the backend so pagination covers all matches.
+  useEffect(() => {
+    if (!data.loaded || !data.initialLoadDone.current || previousSearchRef.current === debouncedSearch) return;
+    previousSearchRef.current = debouncedSearch;
+    void data.loadClips(data.selectedGroupId, debouncedSearch).then(() => setSearchResetKey((key) => key + 1));
+  }, [data.initialLoadDone, data.loadClips, data.loaded, data.selectedGroupId, debouncedSearch]);
 
   // --- Confirm-based actions ---
   const handleWindowClose = useCallback(async () => {
@@ -267,8 +266,8 @@ export default function App() {
 
                 {/* Clip list */}
                 <ClipList
-                    clips={deferredClips}
-                    scrollResetKey={data.scrollResetKey}
+                    clips={data.state.clips.items}
+                    scrollResetKey={data.scrollResetKey + searchResetKey}
                     groups={data.state.groups}
                     settings={data.state.settings}
                     scrollRef={scrollRef}
@@ -276,6 +275,7 @@ export default function App() {
                     onPinToggle={data.handlePinToggle}
                     onMoveGroup={data.handleMoveGroup}
                     onDelete={handleDeleteClip}
+                    onLoadMore={data.loadMoreClips}
                 />
               </>
           ) : null}

@@ -85,6 +85,22 @@ pub fn recopy_clip(state: State<'_, AppState>, clip_id: i64) -> Result<(), Strin
 }
 
 #[tauri::command]
+pub fn recopy_image(state: State<'_, AppState>, file_path: String) -> Result<(), String> {
+    #[cfg(not(target_os = "linux"))]
+    let _ = &state;
+
+    #[cfg(target_os = "linux")]
+    {
+        let mut cb = state.clipboard.lock();
+        clipboard::write_image_path_with_state(&file_path, &mut cb).map_err(runtime_error)
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        clipboard::write_image_path(&file_path).map_err(runtime_error)
+    }
+}
+
+#[tauri::command]
 pub fn pin_toggle(state: State<'_, AppState>, clip_id: i64, pinned: bool) -> Result<(), String> {
     let conn = state.pool.get().map_err(runtime_error)?;
     db::pin_toggle(&conn, clip_id, pinned).map_err(runtime_error)
@@ -258,7 +274,7 @@ pub fn restore_backup(app: AppHandle, state: State<'_, AppState>, zip_path: Stri
     for i in 0..archive.len() {
         let mut entry = archive.by_index(i).map_err(|e| e.to_string())?;
         let entry_name = entry.name().to_string();
-        let out_path = staging_dir.join(&entry_name);
+        let out_path = safe_zip_entry_path(&staging_dir, &entry_name)?;
 
         if entry_name.ends_with('/') {
             std::fs::create_dir_all(&out_path).map_err(|e| e.to_string())?;
@@ -282,6 +298,26 @@ pub fn restore_backup(app: AppHandle, state: State<'_, AppState>, zip_path: Stri
 
     // Restart the app
     app.restart();
+}
+
+fn safe_zip_entry_path(root: &std::path::Path, entry_name: &str) -> Result<std::path::PathBuf, String> {
+    let entry_path = std::path::Path::new(entry_name);
+    if entry_name.is_empty() {
+        return Err("backup contains an empty entry path".to_string());
+    }
+
+    for component in entry_path.components() {
+        match component {
+            std::path::Component::Prefix(_)
+            | std::path::Component::RootDir
+            | std::path::Component::ParentDir => {
+                return Err(format!("backup contains an unsafe entry path: {}", entry_name));
+            }
+            std::path::Component::CurDir | std::path::Component::Normal(_) => {}
+        }
+    }
+
+    Ok(root.join(entry_path))
 }
 
 fn normalize_windows_path(file_path: &str) -> String {
@@ -539,7 +575,8 @@ pub async fn bing_translate(text: String, from: String, to: String) -> Result<St
 
 #[cfg(test)]
 mod tests {
-    use super::resolve_hide_window_action;
+    use super::{resolve_hide_window_action, safe_zip_entry_path};
+    use std::path::Path;
 
     #[test]
     fn resolve_hide_window_action_returns_hide_only_when_paste_disabled() {
@@ -549,6 +586,28 @@ mod tests {
     #[test]
     fn resolve_hide_window_action_returns_previous_hwnd_when_paste_enabled() {
         assert_eq!(resolve_hide_window_action(true, 456), Some(456));
+    }
+
+    #[test]
+    fn safe_zip_entry_path_accepts_paths_inside_staging_root() {
+        let root = Path::new("staging");
+        assert_eq!(safe_zip_entry_path(root, "images/icon.png").unwrap(), root.join("images/icon.png"));
+    }
+
+    #[test]
+    fn safe_zip_entry_path_rejects_traversal_and_absolute_paths() {
+        let root = Path::new("staging");
+        assert!(safe_zip_entry_path(root, "../outside.txt").is_err());
+        assert!(safe_zip_entry_path(root, "images/../../outside.txt").is_err());
+        assert!(safe_zip_entry_path(root, "/absolute.txt").is_err());
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn safe_zip_entry_path_rejects_windows_absolute_paths() {
+        let root = Path::new("staging");
+        assert!(safe_zip_entry_path(root, "C:\\outside.txt").is_err());
+        assert!(safe_zip_entry_path(root, r"\\server\share\outside.txt").is_err());
     }
 }
 
