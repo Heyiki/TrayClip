@@ -21,6 +21,8 @@ import {
 import { FALLBACK_BOOTSTRAP } from "@/lib/constants";
 import type { AppSettings, BootstrapPayload, ClipGroup } from "@/lib/types";
 
+const CLIPS_PAGE_SIZE = 50;
+
 export function useAppData() {
     const [state, setState] = useState<BootstrapPayload>(FALLBACK_BOOTSTRAP);
     const [selectedGroupId, setSelectedGroupId] = useState<number | null>(() => {
@@ -70,7 +72,7 @@ export function useAppData() {
             const gid = groupId === undefined ? selectedGroupIdRef.current : groupId;
             const query = keyword === undefined ? clipsKeywordRef.current : keyword.trim();
             clipsKeywordRef.current = query;
-            const clips = await listClips({ page: 1, page_size: 100, keyword: query || undefined, group_id: gid ?? undefined });
+            const clips = await listClips({ page: 1, page_size: CLIPS_PAGE_SIZE, keyword: query || undefined, group_id: gid ?? undefined });
             if (requestId !== clipsRequestIdRef.current) return;
             clipsPageRef.current = 1;
             clipsHasMoreRef.current = clips.has_more;
@@ -90,7 +92,7 @@ export function useAppData() {
         try {
             const nextClips = await listClips({
                 page: nextPage,
-                page_size: 100,
+                page_size: CLIPS_PAGE_SIZE,
                 keyword: clipsKeywordRef.current || undefined,
                 group_id: gid ?? undefined,
             });
@@ -121,7 +123,7 @@ export function useAppData() {
                     listGroups(),
                     listClips({
                         page: 1,
-                        page_size: 100,
+                        page_size: CLIPS_PAGE_SIZE,
                         keyword: clipsKeywordRef.current || undefined,
                         group_id: selectedGroupIdRef.current ?? undefined,
                     }),
@@ -150,18 +152,12 @@ export function useAppData() {
         });
     }, [loadAll]);
 
-    // Group switch: reload clips and scroll to top
-    useEffect(() => {
-        if (!initialLoadDone.current) return;
-        void loadClips(selectedGroupId).then(() => setScrollResetKey((k) => k + 1));
-    }, [selectedGroupId, loadClips]);
-
     // Reload on focus
     useEffect(() => {
         let unlisten: (() => void) | undefined;
         let cancelled = false;
         getCurrentWindow().onFocusChanged(({ payload: focused }) => {
-            if (focused && initialLoadDone.current && !isDragging.current) { void loadClips().then(() => setScrollResetKey((k) => k + 1)); }
+            if (focused && initialLoadDone.current && !isDragging.current) { void loadClips(); }
         }).then((fn) => {
             if (cancelled) { fn(); return; }
             unlisten = fn;

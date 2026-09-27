@@ -2,7 +2,7 @@ use tauri::{AppHandle, Emitter, Manager, Runtime};
 
 use clipboard_master::{ClipboardHandler, CallbackResult, Master};
 
-use crate::{app_state::AppState, clipboard, db, commands};
+use crate::{app_state::AppState, clipboard, commands, db, source_app};
 
 #[cfg(target_os = "windows")]
 use windows_sys::Win32::System::DataExchange::GetClipboardSequenceNumber;
@@ -61,9 +61,13 @@ impl<R: Runtime> ClipboardHandler for Monitor<R> {
             return CallbackResult::Next;
         }
 
-        let Some((signature, clip)) = try_read_clipboard(&state) else {
+        let Some((signature, mut clip)) = try_read_clipboard(&state) else {
             return CallbackResult::Next;
         };
+
+        if let Some(name) = source_app::detect() {
+            clip.source_app = name;
+        }
 
         let mut last_signature = state.last_clip_signature.lock();
 

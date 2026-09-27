@@ -40,6 +40,9 @@ export const en: typeof zh = {
   imagePreviewCount: (current: number, total: number) => `${current} / ${total}`,
   previousImage: "Previous image",
   nextImage: "Next image",
+  zoomIn: "Zoom in",
+  zoomOut: "Zoom out",
+  resetZoom: "Reset zoom",
   copyImage: "Copy image",
   copyImageFailed: "Failed to copy image",
 

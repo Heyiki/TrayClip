@@ -5,7 +5,7 @@ use tauri::{AppHandle, Emitter, Manager, State};
 use tauri_plugin_autostart::ManagerExt;
 use tauri_plugin_global_shortcut::GlobalShortcutExt;
 
-use crate::{app_state::AppState, clipboard, db, models::{AppSettings, BootstrapPayload, ClipGroup, ConfigPayload, HotkeySetting, ListClipsRequest, ListClipsResponse, PermissionState}};
+use crate::{app_state::AppState, clipboard, db, models::{AppSettings, ClipGroup, ConfigPayload, HotkeySetting, ListClipsRequest, ListClipsResponse, PermissionState}};
 
 #[cfg(target_os = "windows")]
 use std::os::windows::process::CommandExt;
@@ -44,18 +44,6 @@ fn recopy_clip_impl(state: &State<'_, AppState>, clip_id: i64) -> Result<(), Str
     {
         clipboard::write_clipboard(&record).map_err(runtime_error)
     }
-}
-
-#[tauri::command]
-pub fn get_bootstrap(state: State<'_, AppState>, group_id: Option<i64>) -> Result<BootstrapPayload, String> {
-    let conn = state.pool.get().map_err(runtime_error)?;
-    let clips = db::list_clips(&conn, &ListClipsRequest { page: 1, page_size: 100, keyword: None, group_id, pinned_only: Some(false) }).map_err(runtime_error)?;
-    let groups = db::list_groups(&conn).map_err(runtime_error)?;
-    let settings = db::load_settings(&conn).map_err(runtime_error)?;
-    let hotkeys = db::list_hotkeys(&conn).map_err(runtime_error)?;
-    let permissions = state.permissions.read().clone();
-
-    Ok(BootstrapPayload { clips, groups, settings, hotkeys, permissions })
 }
 
 #[tauri::command]
@@ -125,7 +113,7 @@ pub fn move_clip_to_group(state: State<'_, AppState>, clip_id: i64, group_id: Op
 }
 
 #[tauri::command]
-pub fn delete_clip(state: State<'_, AppState>, app: AppHandle, clip_id: i64) -> Result<(), String> {
+pub fn delete_clip(state: State<'_, AppState>, clip_id: i64) -> Result<(), String> {
     let image_path = {
         let conn = state.pool.get().map_err(runtime_error)?;
         db::delete_clip(&conn, clip_id).map_err(runtime_error)?
@@ -133,12 +121,11 @@ pub fn delete_clip(state: State<'_, AppState>, app: AppHandle, clip_id: i64) -> 
     if let Some(path) = image_path {
         let _ = std::fs::remove_file(path);
     }
-    let _ = app.emit("clips://updated", ());
     Ok(())
 }
 
 #[tauri::command]
-pub fn clear_history(state: State<'_, AppState>, app: AppHandle) -> Result<(), String> {
+pub fn clear_history(state: State<'_, AppState>) -> Result<(), String> {
     let images = {
         let conn = state.pool.get().map_err(runtime_error)?;
         db::clear_history(&conn).map_err(runtime_error)?
@@ -146,7 +133,6 @@ pub fn clear_history(state: State<'_, AppState>, app: AppHandle) -> Result<(), S
     for path in images {
         let _ = std::fs::remove_file(path);
     }
-    let _ = app.emit("clips://updated", ());
     Ok(())
 }
 
@@ -177,7 +163,6 @@ pub fn update_settings(app: AppHandle, state: State<'_, AppState>, payload: AppS
         }
     }
     *state.settings.write() = next_settings.clone();
-    let _ = app.emit("clips://updated", ());
     Ok(next_settings)
 }
 

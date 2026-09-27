@@ -1,7 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { AppSettings, BootstrapPayload, ClipGroup, ConfigPayload, HotkeyActionKey, HotkeySetting, ListClipsRequest, ListClipsResponse, PermissionState } from "./types";
+import type { AppSettings, ClipGroup, ConfigPayload, HotkeyActionKey, HotkeySetting, ListClipsRequest, ListClipsResponse, PermissionState } from "./types";
 
-export const getBootstrap = (groupId?: number | null) => invoke<BootstrapPayload>("get_bootstrap", { groupId: groupId ?? null });
 export const getConfig = () => invoke<ConfigPayload>("get_config");
 export const listClips = (payload: ListClipsRequest) => invoke<ListClipsResponse>("list_clips", { payload });
 export const listGroups = () => invoke<ClipGroup[]>("list_groups");

@@ -117,15 +117,6 @@ pub struct ListClipsResponse {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct BootstrapPayload {
-    pub clips: ListClipsResponse,
-    pub groups: Vec<ClipGroup>,
-    pub settings: AppSettings,
-    pub hotkeys: Vec<HotkeySetting>,
-    pub permissions: PermissionState,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ConfigPayload {
     pub settings: AppSettings,
     pub hotkeys: Vec<HotkeySetting>,

@@ -7,6 +7,7 @@ mod db;
 mod models;
 mod monitor;
 mod paths;
+mod source_app;
 
 use anyhow::Context;
 use app_state::AppState;
@@ -371,7 +372,6 @@ fn main() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
-            commands::get_bootstrap,
             commands::get_config,
             commands::list_clips,
             commands::list_groups,

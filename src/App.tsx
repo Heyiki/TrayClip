@@ -126,7 +126,7 @@ export default function App() {
   const [search, setSearch] = useState("");
   const debouncedSearch = useDebouncedValue(search, 250);
   const [searchResetKey, setSearchResetKey] = useState(0);
-  const previousSearchRef = useRef("");
+  const previousQueryRef = useRef("");
   const [activeTab, setActiveTab] = useState<TabKey>("clips");
   const [theme, setTheme] = useState<"light" | "dark">(() => {
     return (localStorage.getItem("trayclip-theme") as "light" | "dark") || "light";
@@ -166,10 +166,17 @@ export default function App() {
     void emit("theme://changed", theme);
   }, [theme]);
 
-  // Search is performed by the backend so pagination covers all matches.
+  // Search and group filtering share one backend query so a single interaction
+  // cannot trigger two competing first-page requests.
   useEffect(() => {
-    if (!data.loaded || !data.initialLoadDone.current || previousSearchRef.current === debouncedSearch) return;
-    previousSearchRef.current = debouncedSearch;
+    if (!data.loaded || !data.initialLoadDone.current) return;
+    const queryKey = `${data.selectedGroupId ?? "all"}:${debouncedSearch}`;
+    if (previousQueryRef.current === "") {
+      previousQueryRef.current = queryKey;
+      return;
+    }
+    if (previousQueryRef.current === queryKey) return;
+    previousQueryRef.current = queryKey;
     void data.loadClips(data.selectedGroupId, debouncedSearch).then(() => setSearchResetKey((key) => key + 1));
   }, [data.initialLoadDone, data.loadClips, data.loaded, data.selectedGroupId, debouncedSearch]);
 

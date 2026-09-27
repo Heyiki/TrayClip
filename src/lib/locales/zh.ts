@@ -43,6 +43,9 @@ export const zh = {
   imagePreviewCount: (current: number, total: number) => `${current} / ${total}`,
   previousImage: "上一张图片",
   nextImage: "下一张图片",
+  zoomIn: "放大",
+  zoomOut: "缩小",
+  resetZoom: "还原缩放",
   copyImage: "复制图片",
   copyImageFailed: "复制图片失败",
 
