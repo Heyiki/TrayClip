@@ -113,6 +113,41 @@ export function useAppData() {
         }
     }, []);
 
+    const reloadLoadedClips = useCallback(async () => {
+        const requestId = ++clipsRequestIdRef.current;
+        const loadedPage = Math.max(1, clipsPageRef.current);
+        const gid = selectedGroupIdRef.current;
+        const query = clipsKeywordRef.current;
+        clipsLoadingRef.current = true;
+        try {
+            const responses = await Promise.all(
+                Array.from({ length: loadedPage }, (_, index) =>
+                    listClips({
+                        page: index + 1,
+                        page_size: CLIPS_PAGE_SIZE,
+                        keyword: query || undefined,
+                        group_id: gid ?? undefined,
+                    }),
+                ),
+            );
+            if (requestId !== clipsRequestIdRef.current) return;
+            const lastResponse = responses[responses.length - 1];
+            setState((prev) => ({
+                ...prev,
+                clips: {
+                    items: responses.flatMap((response) => response.items),
+                    total: lastResponse.total,
+                    has_more: lastResponse.has_more,
+                },
+            }));
+            clipsPageRef.current = loadedPage;
+            clipsHasMoreRef.current = lastResponse.has_more;
+        } catch { /* ignore */ }
+        finally {
+            if (requestId === clipsRequestIdRef.current) clipsLoadingRef.current = false;
+        }
+    }, []);
+
     const loadAll = useCallback(async () => {
         const requestId = ++clipsRequestIdRef.current;
         clipsLoadingRef.current = true;
@@ -198,8 +233,8 @@ export function useAppData() {
 
     const deleteClipConfirmed = useCallback(async (clipId: number) => {
         await deleteClip(clipId);
-        await loadClips();
-    }, [loadClips]);
+        await reloadLoadedClips();
+    }, [reloadLoadedClips]);
 
     const clearHistoryConfirmed = useCallback(async () => {
         await clearHistory();
@@ -258,6 +293,7 @@ export function useAppData() {
         loadConfig,
         loadClips,
         loadMoreClips,
+        reloadLoadedClips,
         loadAll,
         saveSettings,
         createGroup,
