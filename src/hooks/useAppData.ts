@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { emit } from "@tauri-apps/api/event";
 import { message, open, save } from "@tauri-apps/plugin-dialog";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
@@ -199,7 +198,6 @@ export function useAppData() {
             setState((current) => ({ ...current, settings: next }));
             const updated = await updateSettings(next);
             setState((current) => ({ ...current, settings: updated }));
-            void emit("settings://changed", updated);
         } catch (e) {
             console.error("[TrayClip] saveSettings failed:", e);
         }
