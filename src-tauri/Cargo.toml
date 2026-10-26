@@ -12,7 +12,6 @@ tauri-build = { version = "2.6.2", features = [] }
 anyhow = "1.0"
 clipboard-master = "3"
 arboard = "3.4"
-base64 = "0.22"
 chrono = { version = "0.4", features = ["serde"] }
 image = { version = "0.25", default-features = false, features = ["png"] }
 parking_lot = "0.12"
@@ -22,11 +21,13 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
 sha2 = "0.10"
+tempfile = "3"
 zip = "2"
-tauri = { version = "2.11.2", features = ["protocol-asset", "tray-icon", "macos-private-api", "devtools", "image-png"] }
+# `devtools` is not listed on purpose: wry exposes devtools in debug builds through
+# `cfg(debug_assertions)`, the feature only unlocks them in release builds.
+tauri = { version = "2.11.2", features = ["protocol-asset", "tray-icon", "macos-private-api", "image-png"] }
 tauri-plugin-autostart = "2.5.1"
 tauri-plugin-dialog = "2.7.1"
-tauri-plugin-fs = "2.5.1"
 tauri-plugin-global-shortcut = "2.3.1"
 tauri-plugin-opener = "2.5.4"
 tauri-plugin-single-instance = "2.4.2"

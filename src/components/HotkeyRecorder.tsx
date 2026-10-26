@@ -46,17 +46,19 @@ export function HotkeyRecorder({ actionKey, currentValue, onSave }: HotkeyRecord
   const { t } = useTranslation();
   const [recording, setRecording] = useState(false);
   const [preview, setPreview] = useState("");
-  const recordingRef = useRef(false);
+  const blurTimerRef = useRef<number | null>(null);
 
   const stopRecording = useCallback((reload = true) => {
-    recordingRef.current = false;
     setRecording(false);
     setPreview("");
     if (reload) void reloadGlobalShortcuts();
   }, []);
 
   useEffect(() => {
-    return () => { void reloadGlobalShortcuts(); };
+    return () => {
+      if (blurTimerRef.current !== null) window.clearTimeout(blurTimerRef.current);
+      void reloadGlobalShortcuts();
+    };
   }, []);
 
   useEffect(() => {
@@ -76,7 +78,15 @@ export function HotkeyRecorder({ actionKey, currentValue, onSave }: HotkeyRecord
     return () => window.removeEventListener("keydown", handleKeyDown, true);
   }, [recording, actionKey, onSave, stopRecording]);
 
-  const handleBlur = () => { setTimeout(() => stopRecording(true), 150); };
+  // The delay lets a click on another control land before recording ends, so the timer
+  // has to survive re-renders and be cancelled when the panel closes instead.
+  const handleBlur = () => {
+    if (blurTimerRef.current !== null) window.clearTimeout(blurTimerRef.current);
+    blurTimerRef.current = window.setTimeout(() => {
+      blurTimerRef.current = null;
+      stopRecording(true);
+    }, 150);
+  };
 
   return (
       <TooltipProvider>
@@ -89,7 +99,7 @@ export function HotkeyRecorder({ actionKey, currentValue, onSave }: HotkeyRecord
                         : "bg-muted text-foreground/70 hover:text-foreground"
                 }`}
                 tabIndex={0}
-                onClick={() => { recordingRef.current = true; setRecording(true); setPreview(t.pressHotkey); void unregisterAllShortcuts(); }}
+                onClick={() => { setRecording(true); setPreview(t.pressHotkey); void unregisterAllShortcuts(); }}
                 onBlur={handleBlur}
             >
               {recording ? preview : formatHotkeyDisplay(currentValue)}

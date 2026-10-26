@@ -15,7 +15,6 @@
     "core:window:allow-unminimize",
     "dialog:default",
     "dialog:allow-open",
-    "fs:default",
     "global-shortcut:default",
     "autostart:allow-enable",
     "autostart:allow-disable",

@@ -6,25 +6,22 @@ use rusqlite::{params, Connection, OptionalExtension};
 use sha2::{Digest, Sha256};
 
 use crate::app_state::{DbPool, SqliteConnectionManager};
-use crate::{models::{AppSettings, ClipContentType, ClipGroup, ClipRecord, HotkeySetting, ListClipsRequest, ListClipsResponse, NewClipRecord}, paths::AppPaths};
+use crate::{models::{AppSettings, ClipContentType, ClipGroup, ClipListItem, ClipRecord, HotkeySetting, ListClipsRequest, ListClipsResponse, NewClipRecord}, paths::AppPaths};
 
 pub const SCHEMA_VERSION: i64 = 1;
+/// Retention limit is clamped on read and on write so a malformed value can never
+/// wipe the whole history or disable pruning entirely.
+pub const MIN_RETENTION_LIMIT: i64 = 5;
+pub const MAX_RETENTION_LIMIT: i64 = 10_000;
 #[cfg(target_os = "macos")]
 pub const DEFAULT_MAIN_WINDOW_HOTKEY: &str = "Ctrl+P";
 #[cfg(not(target_os = "macos"))]
 pub const DEFAULT_MAIN_WINDOW_HOTKEY: &str = "Ctrl+Shift+V";
 
-pub fn create_pool(paths: &AppPaths) -> anyhow::Result<DbPool> {
-    let manager = SqliteConnectionManager::file(&paths.db_path);
-    let pool = Pool::builder()
-        .max_size(4)
-        .connection_timeout(Duration::from_secs(5))
-        .build(manager)?;
-    // Run migrations on the first connection
-    {
-        let conn = pool.get()?;
-        conn.execute_batch(
-            "
+/// Every table and index the app needs. `CREATE TABLE IF NOT EXISTS` never alters an
+/// existing table, so a column added since a backup was taken is the one thing this
+/// script cannot repair on its own.
+const SCHEMA_SQL: &str = "
             CREATE TABLE IF NOT EXISTS schema_migrations (
                 version INTEGER PRIMARY KEY,
                 applied_at TEXT NOT NULL
@@ -70,12 +67,59 @@ pub fn create_pool(paths: &AppPaths) -> anyhow::Result<DbPool> {
             CREATE INDEX IF NOT EXISTS idx_clips_group_id ON clips(group_id);
             CREATE INDEX IF NOT EXISTS idx_clips_is_pinned ON clips(is_pinned);
             CREATE INDEX IF NOT EXISTS idx_clips_content_hash ON clips(content_hash);
-            "
-        )?;
-        ensure_defaults(&conn)?;
-        mark_schema_version(&conn)?;
+";
+
+pub fn create_pool(paths: &AppPaths) -> anyhow::Result<DbPool> {
+    let manager = SqliteConnectionManager::file(&paths.db_path);
+    let pool = Pool::builder()
+        .max_size(4)
+        .connection_timeout(Duration::from_secs(5))
+        .build(manager)?;
+    // Run migrations on the first connection
+    {
+        let conn = pool.get()?;
+        initialize_database(&conn)?;
     }
     Ok(pool)
+}
+
+/// The only way a file becomes a usable database: schema, defaults, version marker, and
+/// then the reads the app performs on its first frame.
+///
+/// `create_pool` runs it on the live file and the restore validation runs this same
+/// function on the staged copy, so "passed validation" and "starts up" cannot drift
+/// apart as the schema grows.
+pub fn initialize_database(conn: &Connection) -> anyhow::Result<()> {
+    conn.execute_batch(SCHEMA_SQL)?;
+    ensure_defaults(conn)?;
+    mark_schema_version(conn)?;
+
+    // Preparing is the only check that notices a missing column, and running these reads
+    // proves the rows the app deserializes at startup are actually there.
+    load_settings(conn)?;
+    list_groups(conn)?;
+    list_hotkeys(conn)?;
+    conn.prepare(&format!("SELECT {CLIP_COLUMNS} FROM clips LIMIT 0"))?;
+    Ok(())
+}
+
+/// Writes a transactionally consistent copy of the database to `target`.
+///
+/// A plain copy of the main file is not a database: rows committed since the last
+/// checkpoint live in the `-wal` sidecar, and an automatic checkpoint can rewrite the main
+/// file while it is being read. `VACUUM INTO` reads through one read transaction, so the
+/// copy holds every committed row and cannot be torn by a concurrent writer.
+pub fn snapshot_database(conn: &Connection, target: &std::path::Path) -> anyhow::Result<()> {
+    // VACUUM INTO refuses to overwrite, and a leftover file would otherwise be packed as
+    // if it were a fresh snapshot.
+    if target.exists() {
+        std::fs::remove_file(target)
+            .with_context(|| format!("failed to clear {}", target.display()))?;
+    }
+    let target = target.to_string_lossy().into_owned();
+    conn.execute("VACUUM INTO ?1", [target])
+        .context("failed to snapshot the database")?;
+    Ok(())
 }
 
 fn mark_schema_version(conn: &Connection) -> anyhow::Result<()> {
@@ -187,6 +231,10 @@ struct LlmConfigStore {
     ai_translate: bool,
 }
 
+pub fn clamp_retention_limit(value: i64) -> i64 {
+    value.clamp(MIN_RETENTION_LIMIT, MAX_RETENTION_LIMIT)
+}
+
 fn normalize_quick_paste(value: i64) -> i64 {
     match value {
         1 | 2 => value,
@@ -202,7 +250,7 @@ pub fn load_settings(conn: &Connection) -> anyhow::Result<AppSettings> {
             let llm_json: String = row.get(9)?;
             let llm: LlmConfigStore = serde_json::from_str(&llm_json).unwrap_or_default();
             Ok(AppSettings {
-                retention_limit: row.get(0)?,
+                retention_limit: clamp_retention_limit(row.get(0)?),
                 launch_on_startup: row.get::<_, i64>(1)? == 1,
                 pause_capture: row.get::<_, i64>(2)? == 1,
                 locale: row.get(3)?,
@@ -231,12 +279,13 @@ pub fn save_settings(conn: &Connection, settings: &AppSettings) -> anyhow::Resul
         ai_translate: settings.llm_ai_translate,
     };
     let quick_paste = normalize_quick_paste(settings.quick_paste);
+    let retention_limit = clamp_retention_limit(settings.retention_limit);
     let llm_json = serde_json::to_string(&llm_config)?;
     conn.execute(
         "UPDATE app_settings SET retention_limit = ?1, launch_on_startup = ?2, pause_capture = ?3, locale = ?4, accessibility_prompted = ?5, close_behavior = ?6, panel_position = ?7, quick_paste = ?8, url_toast = ?9, llm_config = ?10 WHERE id = 1",
-        params![settings.retention_limit, settings.launch_on_startup as i64, settings.pause_capture as i64, settings.locale, settings.accessibility_prompted as i64, settings.close_behavior, settings.panel_position, quick_paste, settings.url_toast as i64, llm_json],
+        params![retention_limit, settings.launch_on_startup as i64, settings.pause_capture as i64, settings.locale, settings.accessibility_prompted as i64, settings.close_behavior, settings.panel_position, quick_paste, settings.url_toast as i64, llm_json],
     )?;
-    let removed_images = cleanup_overflow(conn, settings.retention_limit)?;
+    let removed_images = cleanup_overflow(conn, retention_limit)?;
     Ok((load_settings(conn)?, removed_images))
 }
 
@@ -332,15 +381,30 @@ pub fn pin_toggle(conn: &Connection, clip_id: i64, pinned: bool) -> anyhow::Resu
     Ok(())
 }
 
-fn map_clip(row: &rusqlite::Row<'_>) -> rusqlite::Result<ClipRecord> {
-    let raw_type: String = row.get(1)?;
-    let content_type = match raw_type.as_str() {
-        "plain_text" => ClipContentType::PlainText,
+/// Text sent with every list row. Enough to render a card, to spot a URL or a JSON head,
+/// and to fall back on when the full text is unavailable; small enough that a full page
+/// stays in the low kilobytes instead of megabytes.
+pub const LIST_PREVIEW_CHARS: usize = 600;
+
+/// Every column of `clips`, in the order `map_clip` consumes. The startup check and the
+/// single-row read both build their SQL from this list, so a new column is declared once and
+/// the validation can never check a different shape than the code actually reads.
+const CLIP_COLUMNS: &str = "id, content_type, plain_text, rich_text, summary, image_path, file_paths_json, source_app, is_pinned, is_truncated, group_id, created_at, updated_at, last_used_at, content_hash, position_updated_at";
+
+fn parse_content_type(raw: &str) -> ClipContentType {
+    match raw {
         "rich_text" => ClipContentType::RichText,
         "image" => ClipContentType::Image,
         "file_paths" => ClipContentType::FilePaths,
         _ => ClipContentType::PlainText,
-    };
+    }
+}
+
+fn map_clip(row: &rusqlite::Row<'_>) -> rusqlite::Result<ClipRecord> {
+    // Reads the leading columns of CLIP_COLUMNS; `content_hash` and `position_updated_at`
+    // are selected but not part of a record handed to the UI.
+    let raw_type: String = row.get(1)?;
+    let content_type = parse_content_type(&raw_type);
     let file_paths_json: String = row.get(6)?;
     let file_paths: Vec<String> = serde_json::from_str(&file_paths_json).unwrap_or_default();
 
@@ -362,12 +426,71 @@ fn map_clip(row: &rusqlite::Row<'_>) -> rusqlite::Result<ClipRecord> {
     })
 }
 
+fn map_clip_list_item(row: &rusqlite::Row<'_>) -> rusqlite::Result<ClipListItem> {
+    let raw_type: String = row.get(1)?;
+    let content_type = parse_content_type(&raw_type);
+    let file_paths_json: String = row.get(5)?;
+    let file_paths: Vec<String> = serde_json::from_str(&file_paths_json).unwrap_or_default();
+
+    // The query fetches one character beyond the limit, so whether the preview was cut is
+    // known without a second query.
+    let raw_preview: String = row.get(2)?;
+    let preview_truncated = raw_preview.chars().count() > LIST_PREVIEW_CHARS;
+    let preview = if preview_truncated {
+        raw_preview.chars().take(LIST_PREVIEW_CHARS).collect()
+    } else {
+        raw_preview
+    };
+
+    Ok(ClipListItem {
+        id: row.get(0)?,
+        content_type,
+        preview,
+        preview_truncated,
+        summary: row.get(3)?,
+        image_path: row.get(4)?,
+        file_paths,
+        source_app: row.get(6)?,
+        is_pinned: row.get::<_, i64>(7)? == 1,
+        is_truncated: row.get::<_, i64>(8)? == 1,
+        group_id: row.get(9)?,
+        created_at: row.get(10)?,
+        updated_at: row.get(11)?,
+        last_used_at: row.get(12)?,
+        // Computed from the stored text, not from the preview: a link past the cut has to
+        // keep its menu entry.
+        has_url: row.get::<_, i64>(13)? == 1,
+    })
+}
+
+/// Full text of one clip, for the copy, translate and LLM actions: those must never run on
+/// the list preview.
+pub fn get_clip_text(conn: &Connection, clip_id: i64) -> anyhow::Result<String> {
+    conn.query_row(
+        "SELECT COALESCE(plain_text, rich_text, '') FROM clips WHERE id = ?1",
+        [clip_id],
+        |row| row.get(0),
+    )
+    .context("failed to load clip text")
+}
+
 pub fn get_clip_by_id(conn: &Connection, clip_id: i64) -> anyhow::Result<ClipRecord> {
     conn.query_row(
-        "SELECT id, content_type, plain_text, rich_text, summary, image_path, file_paths_json, source_app, is_pinned, is_truncated, group_id, created_at, updated_at, last_used_at FROM clips WHERE id = ?1",
+        &format!("SELECT {CLIP_COLUMNS} FROM clips WHERE id = ?1"),
         [clip_id],
         map_clip,
     ).context("failed to load clip")
+}
+
+/// The list variant of `CLIP_COLUMNS`, deliberately different: plain text is cut inside
+/// SQLite (one character past the limit, so `map_clip_list_item` can see whether it was cut)
+/// and never travels over IPC, while the link flag is computed from the uncut text.
+/// Column order is what `map_clip_list_item` reads.
+fn clip_list_columns() -> String {
+    format!(
+        "id, content_type, substr(COALESCE(plain_text, ''), 1, {}), summary, image_path, file_paths_json, source_app, is_pinned, is_truncated, group_id, created_at, updated_at, last_used_at, (instr(COALESCE(plain_text, ''), 'http://') > 0 OR instr(COALESCE(plain_text, ''), 'https://') > 0)",
+        LIST_PREVIEW_CHARS + 1
+    )
 }
 
 pub fn list_clips(conn: &Connection, request: &ListClipsRequest) -> anyhow::Result<ListClipsResponse> {
@@ -378,16 +501,25 @@ pub fn list_clips(conn: &Connection, request: &ListClipsRequest) -> anyhow::Resu
     let group_id = request.group_id;
     let pinned_only = request.pinned_only.unwrap_or(false) as i64;
 
+    const FILTER: &str = "WHERE (?1 = '' OR instr(LOWER(COALESCE(plain_text, '') || ' ' || summary || ' ' || COALESCE(source_app, '') || ' ' || COALESCE(file_paths_json, '')), ?1) > 0) AND (?2 IS NULL OR group_id = ?2) AND (?3 = 0 OR is_pinned = 1)";
+
     let total: i64 = conn.query_row(
-        "SELECT COUNT(*) FROM clips WHERE (?1 = '' OR instr(LOWER(COALESCE(plain_text, '') || ' ' || summary || ' ' || COALESCE(source_app, '') || ' ' || COALESCE(file_paths_json, '')), ?1) > 0) AND (?2 IS NULL OR group_id = ?2) AND (?3 = 0 OR is_pinned = 1)",
+        &format!("SELECT COUNT(*) FROM clips {}", FILTER),
         params![keyword, group_id, pinned_only],
         |row| row.get(0),
     )?;
 
-    let mut statement = conn.prepare(
-        "SELECT id, content_type, plain_text, rich_text, summary, image_path, file_paths_json, source_app, is_pinned, is_truncated, group_id, created_at, updated_at, last_used_at FROM clips WHERE (?1 = '' OR instr(LOWER(COALESCE(plain_text, '') || ' ' || summary || ' ' || COALESCE(source_app, '') || ' ' || COALESCE(file_paths_json, '')), ?1) > 0) AND (?2 IS NULL OR group_id = ?2) AND (?3 = 0 OR is_pinned = 1) ORDER BY is_pinned DESC, position_updated_at DESC, id DESC LIMIT ?4 OFFSET ?5",
+    // Plain text is cut inside SQLite and the link flag comes from the stored text, so the
+    // full text only leaves the database through `get_clip_text`, on demand.
+    let mut statement = conn.prepare(&format!(
+        "SELECT {} FROM clips {} ORDER BY is_pinned DESC, position_updated_at DESC, id DESC LIMIT ?4 OFFSET ?5",
+        clip_list_columns(),
+        FILTER
+    ))?;
+    let rows = statement.query_map(
+        params![keyword, group_id, pinned_only, page_size, offset],
+        map_clip_list_item,
     )?;
-    let rows = statement.query_map(params![keyword, group_id, pinned_only, page_size, offset], map_clip)?;
     let items = rows.collect::<Result<Vec<_>, _>>()?;
 
     Ok(ListClipsResponse {
@@ -463,6 +595,7 @@ pub fn ingest_clip(conn: &Connection, settings: &AppSettings, payload: NewClipRe
 }
 
 pub fn cleanup_overflow(conn: &Connection, retention_limit: i64) -> anyhow::Result<Vec<String>> {
+    let retention_limit = clamp_retention_limit(retention_limit);
     let count = conn.query_row("SELECT COUNT(*) FROM clips", [], |row| row.get::<_, i64>(0))?;
     let overflow = count - retention_limit;
     if overflow <= 0 {
@@ -609,18 +742,22 @@ mod tests {
         let conn = setup_app_conn();
         insert_clip(&conn, 1, Some("D:/images/oldest.png"), "2024-01-01T00:00:00Z");
         insert_clip(&conn, 2, None, "2024-01-01T00:00:01Z");
-        insert_clip(&conn, 3, Some("D:/images/newest.png"), "2024-01-01T00:00:02Z");
+        insert_clip(&conn, 3, None, "2024-01-01T00:00:02Z");
+        insert_clip(&conn, 4, None, "2024-01-01T00:00:03Z");
+        insert_clip(&conn, 5, None, "2024-01-01T00:00:04Z");
+        insert_clip(&conn, 6, None, "2024-01-01T00:00:05Z");
+        insert_clip(&conn, 7, Some("D:/images/newest.png"), "2024-01-01T00:00:06Z");
 
         let mut settings = load_settings(&conn).unwrap();
-        settings.retention_limit = 2;
+        settings.retention_limit = MIN_RETENTION_LIMIT;
 
         let (saved, removed_images) = save_settings(&conn, &settings).unwrap();
 
-        assert_eq!(saved.retention_limit, 2);
+        assert_eq!(saved.retention_limit, MIN_RETENTION_LIMIT);
         assert_eq!(removed_images, vec!["D:/images/oldest.png".to_string()]);
 
         let count: i64 = conn.query_row("SELECT COUNT(*) FROM clips", [], |row| row.get(0)).unwrap();
-        assert_eq!(count, 2);
+        assert_eq!(count, MIN_RETENTION_LIMIT);
 
         let remaining_ids: Vec<i64> = conn
             .prepare("SELECT id FROM clips ORDER BY id ASC")
@@ -629,7 +766,24 @@ mod tests {
             .unwrap()
             .collect::<Result<Vec<_>, _>>()
             .unwrap();
-        assert_eq!(remaining_ids, vec![2, 3]);
+        assert_eq!(remaining_ids, vec![3, 4, 5, 6, 7]);
+    }
+
+    #[test]
+    fn save_settings_clamps_out_of_range_retention_limit() {
+        let conn = setup_app_conn();
+        let mut settings = load_settings(&conn).unwrap();
+
+        for (requested, expected) in [
+            (0, MIN_RETENTION_LIMIT),
+            (-42, MIN_RETENTION_LIMIT),
+            (4, MIN_RETENTION_LIMIT),
+            (1_000_000, MAX_RETENTION_LIMIT),
+        ] {
+            settings.retention_limit = requested;
+            let (saved, _) = save_settings(&conn, &settings).unwrap();
+            assert_eq!(saved.retention_limit, expected, "requested {}", requested);
+        }
     }
 
     #[test]
@@ -670,9 +824,13 @@ mod tests {
         let conn = setup_app_conn();
         insert_clip(&conn, 1, None, "2024-01-01T00:00:00Z");
         insert_clip(&conn, 2, Some("D:/images/second.png"), "2024-01-01T00:00:01Z");
-        insert_clip(&conn, 3, Some("D:/images/third.png"), "2024-01-01T00:00:02Z");
+        insert_clip(&conn, 3, None, "2024-01-01T00:00:02Z");
+        insert_clip(&conn, 4, None, "2024-01-01T00:00:03Z");
+        insert_clip(&conn, 5, None, "2024-01-01T00:00:04Z");
+        insert_clip(&conn, 6, None, "2024-01-01T00:00:05Z");
+        insert_clip(&conn, 7, Some("D:/images/kept.png"), "2024-01-01T00:00:06Z");
 
-        let removed_images = cleanup_overflow(&conn, 1).unwrap();
+        let removed_images = cleanup_overflow(&conn, MIN_RETENTION_LIMIT).unwrap();
 
         assert_eq!(removed_images, vec!["D:/images/second.png".to_string()]);
 
@@ -683,6 +841,103 @@ mod tests {
             .unwrap()
             .collect::<Result<Vec<_>, _>>()
             .unwrap();
-        assert_eq!(remaining_ids, vec![3]);
+        assert_eq!(remaining_ids, vec![3, 4, 5, 6, 7]);
+    }
+
+    fn insert_text_clip(conn: &Connection, plain_text: Option<&str>, rich_text: Option<&str>) {
+        conn.execute(
+            "INSERT INTO clips(id, content_type, plain_text, rich_text, summary, image_path, file_paths_json, source_app, is_pinned, is_truncated, group_id, created_at, updated_at, last_used_at, content_hash, position_updated_at)
+             VALUES (1, 'plain_text', ?1, ?2, 'summary', NULL, '[]', 'Editor', 0, 0, NULL, '2024-01-01T00:00:00Z', '2024-01-01T00:00:00Z', NULL, 'hash-1', '2024-01-01T00:00:00Z')",
+            rusqlite::params![plain_text, rich_text],
+        )
+        .unwrap();
+    }
+
+    fn page_of_one(conn: &Connection) -> crate::models::ClipListItem {
+        let page = list_clips(
+            conn,
+            &ListClipsRequest { page: 1, page_size: 100, keyword: None, group_id: None, pinned_only: None },
+        )
+        .unwrap();
+        page.items.into_iter().next().unwrap()
+    }
+
+    #[test]
+    fn list_clips_sends_a_bounded_preview_instead_of_the_full_text() {
+        let conn = setup_app_conn();
+        let long_text = "a".repeat(LIST_PREVIEW_CHARS + 50);
+        insert_text_clip(&conn, Some(&long_text), None);
+
+        let item = page_of_one(&conn);
+        assert_eq!(item.preview.chars().count(), LIST_PREVIEW_CHARS);
+        assert!(item.preview_truncated);
+
+        // The untruncated text is still there, reachable only on demand.
+        assert_eq!(get_clip_text(&conn, 1).unwrap().chars().count(), LIST_PREVIEW_CHARS + 50);
+    }
+
+    #[test]
+    fn list_clips_keeps_short_text_intact() {
+        let conn = setup_app_conn();
+        insert_text_clip(&conn, Some("short text"), None);
+
+        let item = page_of_one(&conn);
+        assert_eq!(item.preview, "short text");
+        assert!(!item.preview_truncated);
+        assert!(!item.has_url);
+    }
+
+    #[test]
+    fn list_clips_reports_a_link_that_starts_past_the_preview_cut() {
+        let conn = setup_app_conn();
+        let text = format!("{} https://example.com/go", "x".repeat(LIST_PREVIEW_CHARS));
+        insert_text_clip(&conn, Some(&text), None);
+
+        let item = page_of_one(&conn);
+        // The link is invisible in the preview, so only the flag keeps the menu entry alive.
+        assert!(item.preview_truncated);
+        assert!(!item.preview.contains("https://"));
+        assert!(item.has_url);
+    }
+
+    #[test]
+    fn get_clip_text_falls_back_to_rich_text() {
+        let conn = setup_app_conn();
+        insert_text_clip(&conn, None, Some("<b>bold</b>"));
+
+        assert_eq!(get_clip_text(&conn, 1).unwrap(), "<b>bold</b>");
+    }
+
+    fn count_snapshot_rows(conn: &Connection) -> rusqlite::Result<i64> {
+        conn.query_row("SELECT COUNT(*) FROM t", [], |row| row.get(0))
+    }
+
+    #[test]
+    fn snapshot_database_captures_rows_that_are_still_in_the_wal() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("trayclip.db");
+        // The writer stays open for the whole test: closing the last connection checkpoints
+        // the WAL back into the main file and hides the behaviour under test.
+        let writer = Connection::open(&db_path).unwrap();
+        writer.execute_batch("PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0;").unwrap();
+        writer.execute_batch("CREATE TABLE t (id INTEGER PRIMARY KEY, value TEXT NOT NULL);").unwrap();
+        writer.execute("INSERT INTO t(id, value) VALUES(1, 'a'), (2, 'b')", []).unwrap();
+
+        // Copying the main file alone is the trap: the rows are committed, but that file is
+        // not the database.
+        let plain_copy = dir.path().join("plain.db");
+        std::fs::copy(&db_path, &plain_copy).unwrap();
+        let plain = Connection::open(&plain_copy).unwrap();
+        assert!(
+            count_snapshot_rows(&plain).unwrap_or(0) < 2,
+            "the main file alone must not look like a complete snapshot"
+        );
+
+        writer.execute("INSERT INTO t(id, value) VALUES(3, 'c')", []).unwrap();
+        let snapshot_path = dir.path().join("snapshot.db");
+        snapshot_database(&writer, &snapshot_path).unwrap();
+
+        let snapshot = Connection::open(&snapshot_path).unwrap();
+        assert_eq!(count_snapshot_rows(&snapshot).unwrap(), 3);
     }
 }

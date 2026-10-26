@@ -7,7 +7,6 @@ export const en: typeof zh = {
   confirm: "Confirm",
   cancel: "Cancel",
   delete: "Delete",
-  search: "Search",
   settings: "Settings",
   about: "About",
   all: "All",
@@ -115,6 +114,7 @@ export const en: typeof zh = {
   aiResult: "AI Result",
   copyResult: "Copy",
   aiFailed: "AI request failed, please check your settings",
+  aiTimeout: "AI request timed out, please check your network or API URL",
   aiDisclaimer: "AI-generated content — please verify before use",
 
   // Translate

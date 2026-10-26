@@ -1,14 +1,11 @@
-use std::io::{Read as _, Write as _};
+use std::io::Read as _;
 
-use base64::{engine::general_purpose::STANDARD, Engine as _};
 use tauri::{AppHandle, Emitter, Manager, State};
 use tauri_plugin_autostart::ManagerExt;
 use tauri_plugin_global_shortcut::GlobalShortcutExt;
 
-use crate::{app_state::AppState, clipboard, db, models::{AppSettings, ClipGroup, ConfigPayload, HotkeySetting, ListClipsRequest, ListClipsResponse, PermissionState}};
+use crate::{app_state::AppState, clipboard, db, models::{AppSettings, ClipGroup, ConfigPayload, HotkeySetting, ListClipsRequest, ListClipsResponse}};
 
-#[cfg(target_os = "windows")]
-use std::os::windows::process::CommandExt;
 #[cfg(target_os = "windows")]
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
     SendInput, INPUT, INPUT_KEYBOARD, KEYEVENTF_KEYUP, VK_CONTROL,
@@ -18,6 +15,69 @@ use windows_sys::Win32::UI::WindowsAndMessaging::SetForegroundWindow;
 
 fn runtime_error(error: impl std::fmt::Display) -> String {
     error.to_string()
+}
+
+/// Whether an already canonicalized path sits inside an already canonicalized `root`.
+///
+/// The root is resolved by the caller rather than here because a batch cleanup would
+/// otherwise re-open the same directory once per file. Pass the result of
+/// [`canonicalize`](std::fs::canonicalize) for the images directory, nothing else.
+///
+/// `direct_child` narrows it to an immediate file of `root`: managed images are stored flat
+/// under `images/`, so anything deeper is not ours to delete. Preview uses plain containment,
+/// because a recorded file path may point into a subfolder the user copied from. Both rules
+/// live here so "inside the images directory" has exactly one meaning per call site.
+fn is_within_canonical_root(root: &std::path::Path, canonical: &std::path::Path, direct_child: bool) -> bool {
+    if direct_child {
+        return canonical.parent() == Some(root);
+    }
+    canonical.starts_with(root)
+}
+
+/// Resolves the managed images directory, reporting `None` when it is unavailable. Cleanup
+/// must refuse to delete in that case: without a resolved root there is no way to tell our
+/// own files apart from an arbitrary path, which is the whole point of the whitelist.
+fn canonical_images_root(images_dir: &std::path::Path) -> Option<std::path::PathBuf> {
+    images_dir.canonicalize().ok()
+}
+
+/// Deletes a file only when it is a direct child of the managed images directory.
+/// A restored backup can carry arbitrary `image_path` values, so paths read back
+/// from the database are never trusted for deletion.
+fn remove_managed_image(images_root: &std::path::Path, file_path: &str) -> bool {
+    let path = std::path::Path::new(file_path);
+    let Ok(canonical) = path.canonicalize() else {
+        // File is already gone — nothing to delete.
+        return true;
+    };
+    if !is_within_canonical_root(images_root, &canonical, true) {
+        eprintln!("[cleanup] refused to delete file outside images dir: {}", path.display());
+        return false;
+    }
+    match std::fs::remove_file(&canonical) {
+        Ok(()) => true,
+        Err(e) => {
+            eprintln!("[cleanup] failed to delete {}: {}", canonical.display(), e);
+            false
+        }
+    }
+}
+
+/// Deletes a batch of managed images. Backup holds the same lock for its whole run, so a
+/// retention pass cannot pull a file out from under an archive that is being written.
+pub(crate) fn remove_managed_images(state: &AppState, image_paths: Vec<String>) {
+    let _guard = state.image_cleanup_lock.lock();
+    if image_paths.is_empty() {
+        return;
+    }
+    // Resolved once for the whole batch; an unavailable directory refuses every file in it.
+    let Some(images_root) = canonical_images_root(&state.paths.images_dir) else {
+        eprintln!("[cleanup] images dir unavailable: {}", state.paths.images_dir.display());
+        return;
+    };
+    for file_path in image_paths {
+        remove_managed_image(&images_root, &file_path);
+    }
 }
 
 #[cfg(target_os = "windows")]
@@ -51,14 +111,63 @@ pub fn get_config(state: State<'_, AppState>) -> Result<ConfigPayload, String> {
     let conn = state.pool.get().map_err(runtime_error)?;
     let settings = db::load_settings(&conn).map_err(runtime_error)?;
     let hotkeys = db::list_hotkeys(&conn).map_err(runtime_error)?;
-    let permissions = state.permissions.read().clone();
-    Ok(ConfigPayload { settings, hotkeys, permissions })
+    Ok(ConfigPayload { settings, hotkeys })
 }
 
 #[tauri::command]
 pub fn list_clips(state: State<'_, AppState>, payload: ListClipsRequest) -> Result<ListClipsResponse, String> {
     let conn = state.pool.get().map_err(runtime_error)?;
     db::list_clips(&conn, &payload).map_err(runtime_error)
+}
+
+#[tauri::command]
+pub fn get_clip_text(state: State<'_, AppState>, clip_id: i64) -> Result<String, String> {
+    let conn = state.pool.get().map_err(runtime_error)?;
+    db::get_clip_text(&conn, clip_id).map_err(runtime_error)
+}
+
+/// Grants the webview read access to one image path and reports whether it can be loaded.
+/// Paths inside the managed images directory are already covered by the static asset scope;
+/// a path elsewhere is only granted when the user has actually copied it, which keeps this
+/// from becoming a general file reader.
+#[tauri::command]
+pub fn allow_image_preview(app: AppHandle, state: State<'_, AppState>, path: String) -> Result<bool, String> {
+    let Ok(canonical) = std::fs::canonicalize(&path) else { return Ok(false) };
+    if !canonical.is_file() {
+        return Ok(false);
+    }
+    // A missing images directory simply means this path is not one of our managed images,
+    // so the recorded-path check below still gets to decide.
+    let images_root = canonical_images_root(&state.paths.images_dir);
+    if images_root
+        .as_deref()
+        .is_some_and(|root| is_within_canonical_root(root, &canonical, false))
+    {
+        // The static scope already covers this one.
+        return Ok(true);
+    }
+
+    let conn = state.pool.get().map_err(runtime_error)?;
+    if !is_recorded_file_path(&conn, &path)? {
+        return Ok(false);
+    }
+
+    let scope = app.asset_protocol_scope();
+    // The webview resolves the URL built from the original string, which is not always the
+    // canonical form, so both spellings are granted.
+    let _ = scope.allow_file(std::path::Path::new(&path));
+    let _ = scope.allow_file(&canonical);
+    Ok(true)
+}
+
+fn is_recorded_file_path(conn: &rusqlite::Connection, path: &str) -> Result<bool, String> {
+    let mut statement = conn
+        .prepare(
+            "SELECT 1 FROM clips, json_each(CASE WHEN json_valid(clips.file_paths_json) THEN clips.file_paths_json ELSE '[]' END) AS entry WHERE entry.value = ?1 LIMIT 1",
+        )
+        .map_err(runtime_error)?;
+    let mut rows = statement.query([path]).map_err(runtime_error)?;
+    Ok(rows.next().map_err(runtime_error)?.is_some())
 }
 
 #[tauri::command]
@@ -119,7 +228,7 @@ pub fn delete_clip(state: State<'_, AppState>, clip_id: i64) -> Result<(), Strin
         db::delete_clip(&conn, clip_id).map_err(runtime_error)?
     };
     if let Some(path) = image_path {
-        let _ = std::fs::remove_file(path);
+        remove_managed_images(&state, vec![path]);
     }
     Ok(())
 }
@@ -130,16 +239,8 @@ pub fn clear_history(state: State<'_, AppState>) -> Result<(), String> {
         let conn = state.pool.get().map_err(runtime_error)?;
         db::clear_history(&conn).map_err(runtime_error)?
     };
-    for path in images {
-        let _ = std::fs::remove_file(path);
-    }
+    remove_managed_images(&state, images);
     Ok(())
-}
-
-#[tauri::command]
-pub fn get_settings(state: State<'_, AppState>) -> Result<AppSettings, String> {
-    let conn = state.pool.get().map_err(runtime_error)?;
-    db::load_settings(&conn).map_err(runtime_error)
 }
 
 #[tauri::command]
@@ -148,9 +249,7 @@ pub fn update_settings(app: AppHandle, state: State<'_, AppState>, payload: AppS
         let conn = state.pool.get().map_err(runtime_error)?;
         db::save_settings(&conn, &payload).map_err(runtime_error)?
     };
-    for path in removed_images {
-        let _ = std::fs::remove_file(path);
-    }
+    remove_managed_images(&state, removed_images);
     // Sync launch_on_startup to OS autostart
     {
         let launch = app.autolaunch();
@@ -164,12 +263,6 @@ pub fn update_settings(app: AppHandle, state: State<'_, AppState>, payload: AppS
     }
     *state.settings.write() = next_settings.clone();
     Ok(next_settings)
-}
-
-#[tauri::command]
-pub fn get_hotkeys(state: State<'_, AppState>) -> Result<Vec<HotkeySetting>, String> {
-    let conn = state.pool.get().map_err(runtime_error)?;
-    db::list_hotkeys(&conn).map_err(runtime_error)
 }
 
 #[tauri::command]
@@ -202,14 +295,21 @@ fn add_dir_to_zip(
 ) -> anyhow::Result<()> {
     for entry in std::fs::read_dir(dir)? {
         let entry = entry?;
+        let file_type = entry.file_type()?;
+        // A link would either duplicate the target inside the archive or send the walk in
+        // circles. Restore writes plain files anyway, so links carry no value here.
+        if file_type.is_symlink() {
+            continue;
+        }
         let path = entry.path();
         let name = format!("{}/{}", prefix, entry.file_name().to_string_lossy());
-        if path.is_dir() {
+        if file_type.is_dir() {
             add_dir_to_zip(zip, &path, &name, options)?;
         } else {
             zip.start_file(&name, options)?;
-            let bytes = std::fs::read(&path)?;
-            zip.write_all(&bytes)?;
+            // Streamed: a single screenshot must not have to fit in memory to be backed up.
+            let mut file = std::fs::File::open(&path)?;
+            std::io::copy(&mut file, zip)?;
         }
     }
     Ok(())
@@ -219,11 +319,27 @@ fn add_dir_to_zip(
 pub fn backup_data(state: State<'_, AppState>, save_path: String) -> Result<String, String> {
     let paths = &state.paths;
 
-    // Force WAL checkpoint so all committed data is in the main .db file
+    // Held until the archive is closed: a retention pass or a manual delete would otherwise
+    // remove an image file while it is being read.
+    let _cleanup_guard = state.image_cleanup_lock.lock();
+
+    // Snapshot first. The live database cannot simply be copied: rows committed since the
+    // last checkpoint live in the `-wal` file, and the checkpoint that was supposed to flush
+    // them can silently report "busy" and leave them behind.
+    let snapshot = tempfile::Builder::new()
+        .prefix("trayclip-backup-")
+        .tempdir()
+        .map_err(|e| e.to_string())?;
+    let snapshot_db = snapshot.path().join("trayclip.db");
     {
         let conn = state.pool.get().map_err(runtime_error)?;
-        conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE)").map_err(|e: rusqlite::Error| e.to_string())?;
+        db::snapshot_database(&conn, &snapshot_db).map_err(runtime_error)?;
     }
+
+    // Refuse here rather than write an archive that restore would reject later.
+    let db_bytes = std::fs::metadata(&snapshot_db).map_err(|e| e.to_string())?.len();
+    let (images_bytes, files) = measure_dir(&paths.images_dir).map_err(|e| e.to_string())?;
+    check_backup_limits(db_bytes, images_bytes, files)?;
 
     let file = std::fs::File::create(&save_path).map_err(|e| e.to_string())?;
     let mut zip = zip::ZipWriter::new(file);
@@ -231,8 +347,8 @@ pub fn backup_data(state: State<'_, AppState>, save_path: String) -> Result<Stri
 
     // Add database
     zip.start_file("trayclip.db", options).map_err(|e| e.to_string())?;
-    let db_bytes = std::fs::read(&paths.db_path).map_err(|e| e.to_string())?;
-    zip.write_all(&db_bytes).map_err(|e| e.to_string())?;
+    let mut db_file = std::fs::File::open(&snapshot_db).map_err(|e| e.to_string())?;
+    std::io::copy(&mut db_file, &mut zip).map_err(|e| e.to_string())?;
 
     // Add images
     if paths.images_dir.exists() {
@@ -243,19 +359,119 @@ pub fn backup_data(state: State<'_, AppState>, save_path: String) -> Result<Stri
     Ok(save_path)
 }
 
+/// Restore is the only path that writes attacker-controlled bytes to disk in bulk,
+/// so the archive gets bounded instead of trusted.
+const MAX_BACKUP_ENTRIES: usize = 20_000;
+/// One image. The database is restored whole or not at all, so it gets its own budget.
+const MAX_BACKUP_ENTRY_BYTES: u64 = 256 * 1024 * 1024;
+/// One `MAX_RETENTION_LIMIT` worth of 1 MiB text clips is an order of magnitude past a
+/// single image, and the database cannot be split across entries the way images can.
+const MAX_DATABASE_BYTES: u64 = 1024 * 1024 * 1024;
+/// Deliberately generous: a screenshot-heavy history of 200 clips easily passes 1 GiB.
+/// The streaming copy keeps peak memory independent of this number, so the limit only
+/// bounds the temporary disk usage.
+const MAX_BACKUP_TOTAL_BYTES: u64 = 2 * 1024 * 1024 * 1024;
+
+/// The database is the one entry that has to arrive complete, so it may use the database
+/// budget; every other entry in an archive is an image.
+fn entry_byte_limit(entry_name: &str) -> u64 {
+    if entry_name == "trayclip.db" {
+        MAX_DATABASE_BYTES
+    } else {
+        MAX_BACKUP_ENTRY_BYTES
+    }
+}
+
+/// Returns how many bytes the current entry may consume. `declared_bytes` comes from
+/// the archive itself, so it is only used for an early rejection — the hard limit is
+/// enforced while copying.
+fn restore_entry_budget(total_written: u64, declared_bytes: u64, entry_name: &str) -> Result<u64, String> {
+    let budget = entry_byte_limit(entry_name).min(MAX_BACKUP_TOTAL_BYTES.saturating_sub(total_written));
+    if declared_bytes > budget {
+        return Err(format!(
+            "backup entry {} exceeds the restore size limit: {} bytes declared, {} allowed",
+            entry_name, declared_bytes, budget
+        ));
+    }
+    Ok(budget)
+}
+
+/// Backup is the mirror of restore, so it applies the same limits before the first byte is
+/// written instead of producing an archive that restore would refuse to read.
+fn check_backup_limits(db_bytes: u64, images_bytes: u64, files: usize) -> Result<(), String> {
+    if db_bytes > MAX_DATABASE_BYTES {
+        return Err(format!(
+            "history database is too large to back up: {} bytes, {} allowed",
+            db_bytes, MAX_DATABASE_BYTES
+        ));
+    }
+    // Entries are the database plus one per file; empty directories are not stored.
+    if files + 1 > MAX_BACKUP_ENTRIES {
+        return Err(format!(
+            "history contains too many files to back up: {}, at most {} are supported",
+            files,
+            MAX_BACKUP_ENTRIES - 1
+        ));
+    }
+    let total = db_bytes.saturating_add(images_bytes);
+    if total > MAX_BACKUP_TOTAL_BYTES {
+        return Err(format!(
+            "backup would exceed the restore size limit: {} bytes, {} allowed",
+            total, MAX_BACKUP_TOTAL_BYTES
+        ));
+    }
+    Ok(())
+}
+
+/// Total size and file count of a tree, skipping links exactly like `add_dir_to_zip` so the
+/// estimate matches what actually gets written. Metadata only: the cost is proportional to
+/// the number of files, not to their size.
+fn measure_dir(dir: &std::path::Path) -> std::io::Result<(u64, usize)> {
+    let mut bytes = 0u64;
+    let mut files = 0usize;
+    if !dir.exists() {
+        return Ok((0, 0));
+    }
+    for entry in std::fs::read_dir(dir)? {
+        let entry = entry?;
+        let file_type = entry.file_type()?;
+        if file_type.is_symlink() {
+            continue;
+        }
+        if file_type.is_dir() {
+            let (nested_bytes, nested_files) = measure_dir(&entry.path())?;
+            bytes += nested_bytes;
+            files += nested_files;
+        } else {
+            bytes += entry.metadata()?.len();
+            files += 1;
+        }
+    }
+    Ok((bytes, files))
+}
+
 #[tauri::command]
 pub fn restore_backup(app: AppHandle, state: State<'_, AppState>, zip_path: String) -> Result<(), String> {
-    let staging_dir = std::env::temp_dir().join("trayclip-restore-staging");
-
-    // Clean up any previous staging
-    if staging_dir.exists() {
-        std::fs::remove_dir_all(&staging_dir).map_err(|e| e.to_string())?;
-    }
-    std::fs::create_dir_all(&staging_dir).map_err(|e| e.to_string())?;
+    // Randomly named staging directory under the system temp dir: the path cannot be
+    // predicted (and therefore pre-created as a junction/symlink) by another process.
+    let staging = tempfile::Builder::new()
+        .prefix("trayclip-restore-")
+        .tempdir()
+        .map_err(|e| e.to_string())?;
+    let staging_dir = staging.path().to_path_buf();
 
     // Extract zip to staging
     let file = std::fs::File::open(&zip_path).map_err(|e| e.to_string())?;
     let mut archive = zip::ZipArchive::new(file).map_err(|e| e.to_string())?;
+    if archive.len() > MAX_BACKUP_ENTRIES {
+        return Err(format!(
+            "backup contains {} entries, at most {} are supported",
+            archive.len(),
+            MAX_BACKUP_ENTRIES
+        ));
+    }
+
+    let mut total_bytes: u64 = 0;
     for i in 0..archive.len() {
         let mut entry = archive.by_index(i).map_err(|e| e.to_string())?;
         let entry_name = entry.name().to_string();
@@ -263,23 +479,49 @@ pub fn restore_backup(app: AppHandle, state: State<'_, AppState>, zip_path: Stri
 
         if entry_name.ends_with('/') {
             std::fs::create_dir_all(&out_path).map_err(|e| e.to_string())?;
-        } else {
-            if let Some(parent) = out_path.parent() {
-                std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-            }
-            let mut buf = Vec::new();
-            entry.read_to_end(&mut buf).map_err(|e| e.to_string())?;
-            std::fs::write(&out_path, &buf).map_err(|e| e.to_string())?;
+            continue;
         }
+
+        if let Some(parent) = out_path.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+        }
+        let budget = restore_entry_budget(total_bytes, entry.size(), &entry_name)?;
+        let mut out = std::fs::File::create(&out_path).map_err(|e| e.to_string())?;
+        // Stream with a hard cap so the real decompressed size stays bounded even when
+        // the archive declares a smaller size than it actually expands to.
+        let written = match std::io::copy(&mut entry.by_ref().take(budget + 1), &mut out) {
+            Ok(written) => written,
+            Err(e) => {
+                drop(out);
+                let _ = std::fs::remove_file(&out_path);
+                return Err(e.to_string());
+            }
+        };
+        drop(out);
+        if written > budget {
+            let _ = std::fs::remove_file(&out_path);
+            return Err(format!(
+                "backup entry {} exceeds the restore size limit ({} bytes)",
+                entry_name, budget
+            ));
+        }
+        total_bytes += written;
     }
 
-    // Write restore marker with both staging and destination paths
-    // so apply_pending_restore uses the same root_dir as AppPaths::resolve
+    // Write the restore marker. Only the first line (the staging path) is consumed now —
+    // the destination is recomputed on startup — but the second line is kept so that an
+    // older build can still interpret a marker written by this one.
     let marker_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
     std::fs::create_dir_all(&marker_dir).map_err(|e| e.to_string())?;
     let marker_path = marker_dir.join(".restore-pending");
-    let marker_content = format!("{}\n{}", staging_dir.display(), state.paths.root_dir.display());
+    // The data directory is derived from the database path so the two cannot disagree.
+    let root_dir = state.paths.db_path.parent().unwrap_or(std::path::Path::new(""));
+    let marker_content = format!("{}\n{}", staging_dir.display(), root_dir.display());
     std::fs::write(&marker_path, marker_content).map_err(|e| e.to_string())?;
+
+    // The staging directory has to outlive this process: apply_pending_restore
+    // consumes it on the next launch and removes it afterwards.
+    let _kept_staging = staging.keep();
 
     // Restart the app
     app.restart();
@@ -303,62 +545,6 @@ fn safe_zip_entry_path(root: &std::path::Path, entry_name: &str) -> Result<std::
     }
 
     Ok(root.join(entry_path))
-}
-
-fn normalize_windows_path(file_path: &str) -> String {
-    if let Some(stripped) = file_path.strip_prefix("\\\\?\\UNC\\") {
-        return format!("\\\\{}", stripped);
-    }
-    if let Some(stripped) = file_path.strip_prefix("\\\\?\\") {
-        return stripped.to_string();
-    }
-    file_path.to_string()
-}
-
-fn mime_from_path(file_path: &str) -> &'static str {
-    let lower = file_path.to_ascii_lowercase();
-    if lower.ends_with(".jpg") || lower.ends_with(".jpeg") {
-        "image/jpeg"
-    } else if lower.ends_with(".gif") {
-        "image/gif"
-    } else if lower.ends_with(".bmp") {
-        "image/bmp"
-    } else if lower.ends_with(".webp") {
-        "image/webp"
-    } else if lower.ends_with(".svg") {
-        "image/svg+xml"
-    } else if lower.ends_with(".ico") {
-        "image/x-icon"
-    } else if lower.ends_with(".tif") || lower.ends_with(".tiff") {
-        "image/tiff"
-    } else {
-        "image/png"
-    }
-}
-
-#[tauri::command]
-pub fn load_image_data_url(file_path: String) -> Result<String, String> {
-    let normalized = normalize_windows_path(&file_path);
-    let bytes = std::fs::read(&normalized).map_err(|err| err.to_string())?;
-    let encoded = STANDARD.encode(bytes);
-    Ok(format!("data:{};base64,{}", mime_from_path(&normalized), encoded))
-}
-
-#[tauri::command]
-pub fn get_permissions(state: State<'_, AppState>) -> Result<PermissionState, String> {
-    Ok(state.permissions.read().clone())
-}
-
-#[tauri::command]
-pub fn request_accessibility_permission(_state: State<'_, AppState>) -> Result<bool, String> {
-    #[cfg(target_os = "macos")]
-    {
-        Ok(false)
-    }
-    #[cfg(not(target_os = "macos"))]
-    {
-        Ok(true)
-    }
 }
 
 #[tauri::command]
@@ -404,8 +590,9 @@ fn make_key_input(vk: u16, flags: u32) -> INPUT {
     input
 }
 
-#[tauri::command]
-pub fn simulate_paste() -> Result<(), String> {
+/// Not an IPC command: quick paste drives it from `hide_window`, and the webview has no
+/// reason to synthesize Ctrl+V on its own.
+fn simulate_paste() -> Result<(), String> {
     #[cfg(target_os = "windows")]
     {
         let inputs = [
@@ -445,10 +632,30 @@ pub fn show_url_toast_window<R: tauri::Runtime>(app: &AppHandle<R>, url: &str) {
     }
 }
 
-#[tauri::command]
-pub fn show_url_toast(app: AppHandle, url: String) -> Result<(), String> {
-    show_url_toast_window(&app, &url);
-    Ok(())
+// --- HTTP ---
+
+/// Every outbound request shares one client so the connect/read timeouts apply
+/// uniformly — a stalled server must never leave a command pending forever.
+const HTTP_CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+const HTTP_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20);
+const HTTP_REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
+fn http_client() -> reqwest::Client {
+    static CLIENT: std::sync::OnceLock<reqwest::Client> = std::sync::OnceLock::new();
+    CLIENT
+        .get_or_init(|| {
+            reqwest::Client::builder()
+                .connect_timeout(HTTP_CONNECT_TIMEOUT)
+                .read_timeout(HTTP_READ_TIMEOUT)
+                .timeout(HTTP_REQUEST_TIMEOUT)
+                .user_agent(concat!("trayclip/", env!("CARGO_PKG_VERSION")))
+                .build()
+                .unwrap_or_else(|e| {
+                    eprintln!("[http] failed to build client: {} — using defaults", e);
+                    reqwest::Client::new()
+                })
+        })
+        .clone()
 }
 
 // --- Bing Translate ---
@@ -464,70 +671,9 @@ const EDGE_TRANSLATE_HEADERS: &[(&str, &str)] = &[
     ("content-type", "application/json"),
 ];
 
-#[allow(dead_code)]
-const BING_AUTH_URL: &str = "https://edge.microsoft.com/translate/auth";
-#[allow(dead_code)]
-const BING_TRANSLATE_URL: &str = "https://api-edge.cognitive.microsofttranslator.com/translate";
-
-#[allow(dead_code)]
-const BING_COMMON_HEADERS: &[(&str, &str)] = &[
-    ("Accept", "application/json, text/plain, */*"),
-    ("Accept-Language", "zh-CN"),
-    ("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) time-translate/0.9.15 Chrome/104.0.5112.124 Electron/20.3.8 Safari/537.36"),
-    ("sec-ch-ua", "\" Not A;Brand\";v=\"99\", \"Chromium\";v=\"104\""),
-    ("sec-ch-ua-mobile", "?0"),
-    ("sec-ch-ua-platform", "\"Windows\""),
-    ("Sec-Fetch-Site", "cross-site"),
-    ("Sec-Fetch-Mode", "cors"),
-    ("Sec-Fetch-Dest", "empty"),
-];
-
-#[allow(dead_code)]
-struct BingTokenCache {
-    token: String,
-    expiry: std::time::Instant,
-}
-
-#[allow(dead_code)]
-static BING_TOKEN: std::sync::OnceLock<std::sync::Mutex<BingTokenCache>> = std::sync::OnceLock::new();
-
-#[allow(dead_code)]
-async fn get_bing_token(client: &reqwest::Client) -> Result<String, String> {
-    let cache = BING_TOKEN.get_or_init(|| std::sync::Mutex::new(BingTokenCache {
-        token: String::new(),
-        expiry: std::time::Instant::now(),
-    }));
-    {
-        let cached = cache.lock().unwrap();
-        if !cached.token.is_empty() && std::time::Instant::now() < cached.expiry {
-            return Ok(cached.token.clone());
-        }
-    }
-
-    let mut req = client.get(BING_AUTH_URL);
-    for (k, v) in BING_COMMON_HEADERS {
-        req = req.header(*k, *v);
-    }
-    let resp = req.send().await.map_err(|e| format!("Bing auth request failed: {}", e))?;
-    if !resp.status().is_success() {
-        return Err(format!("Bing auth failed: {}", resp.status()));
-    }
-    let token = resp.text().await.map_err(|e| format!("Bing auth read failed: {}", e))?.trim().to_string();
-    if token.is_empty() {
-        return Err("Bing auth returned empty token".into());
-    }
-
-    let mut cached = cache.lock().unwrap();
-    *cached = BingTokenCache {
-        token: token.clone(),
-        expiry: std::time::Instant::now() + std::time::Duration::from_secs(9 * 60),
-    };
-    Ok(token)
-}
-
 #[tauri::command]
 pub async fn bing_translate(text: String, from: String, to: String) -> Result<String, String> {
-    let client = reqwest::Client::new();
+    let client = http_client();
     let mut params = vec![
         ("to", to.as_str()),
         ("isEnterpriseClient", "false"),
@@ -560,7 +706,10 @@ pub async fn bing_translate(text: String, from: String, to: String) -> Result<St
 
 #[cfg(test)]
 mod tests {
-    use super::{resolve_hide_window_action, safe_zip_entry_path};
+    use super::{
+        check_backup_limits, restore_entry_budget, resolve_hide_window_action, safe_zip_entry_path,
+        MAX_BACKUP_ENTRY_BYTES, MAX_BACKUP_ENTRIES, MAX_BACKUP_TOTAL_BYTES, MAX_DATABASE_BYTES,
+    };
     use std::path::Path;
 
     #[test]
@@ -594,6 +743,41 @@ mod tests {
         assert!(safe_zip_entry_path(root, "C:\\outside.txt").is_err());
         assert!(safe_zip_entry_path(root, r"\\server\share\outside.txt").is_err());
     }
+
+    #[test]
+    fn restore_entry_budget_caps_single_entry_and_total() {
+        const IMAGE: &str = "images/a.png";
+        const DB: &str = "trayclip.db";
+
+        // Fresh restore: the per-entry limit is the binding constraint.
+        assert_eq!(restore_entry_budget(0, 1024, IMAGE).unwrap(), MAX_BACKUP_ENTRY_BYTES);
+        assert!(restore_entry_budget(0, MAX_BACKUP_ENTRY_BYTES + 1, IMAGE).is_err());
+
+        // The database is allowed more than an image, which is what lets a fat history
+        // round-trip through backup and restore.
+        assert_eq!(restore_entry_budget(0, MAX_DATABASE_BYTES, DB).unwrap(), MAX_DATABASE_BYTES);
+        assert!(restore_entry_budget(0, MAX_DATABASE_BYTES + 1, DB).is_err());
+
+        // The total budget wins once it has less room left than one entry.
+        let nearly_full = MAX_BACKUP_TOTAL_BYTES - 10;
+        assert_eq!(restore_entry_budget(nearly_full, 10, IMAGE).unwrap(), 10);
+        assert!(restore_entry_budget(nearly_full, 11, IMAGE).is_err());
+
+        // Nothing left at all: only a zero-byte entry still fits.
+        assert_eq!(restore_entry_budget(MAX_BACKUP_TOTAL_BYTES, 0, IMAGE).unwrap(), 0);
+        assert!(restore_entry_budget(MAX_BACKUP_TOTAL_BYTES, 1, IMAGE).is_err());
+    }
+
+    #[test]
+    fn check_backup_limits_accepts_exactly_what_restore_accepts() {
+        assert!(check_backup_limits(MAX_DATABASE_BYTES, 0, 0).is_ok());
+        assert!(check_backup_limits(0, MAX_BACKUP_TOTAL_BYTES, 0).is_ok());
+        assert!(check_backup_limits(0, 0, MAX_BACKUP_ENTRIES - 1).is_ok());
+
+        assert!(check_backup_limits(MAX_DATABASE_BYTES + 1, 0, 0).is_err());
+        assert!(check_backup_limits(0, MAX_BACKUP_TOTAL_BYTES + 1, 0).is_err());
+        assert!(check_backup_limits(0, 0, MAX_BACKUP_ENTRIES).is_err());
+    }
 }
 
 const GITHUB_REPO: &str = "Heyiki/TrayClip";
@@ -607,94 +791,40 @@ pub struct UpdateInfo {
 }
 
 #[tauri::command]
-pub fn get_installer_type() -> String {
-    static CACHED: std::sync::OnceLock<String> = std::sync::OnceLock::new();
-    CACHED.get_or_init(|| {
-        #[cfg(target_os = "windows")]
-        { detect_windows_install_type().to_string() }
-        #[cfg(not(target_os = "windows"))]
-        { "unknown".to_string() }
-    }).clone()
-}
-
-#[tauri::command]
 pub async fn check_update(current_version: String, installer_type: String) -> Result<UpdateInfo, String> {
-    let info = tauri::async_runtime::spawn_blocking(move || {
-        let url = format!("https://api.github.com/repos/{}/releases/latest", GITHUB_REPO);
+    let url = format!("https://api.github.com/repos/{}/releases/latest", GITHUB_REPO);
+    let response = http_client()
+        .get(&url)
+        .header("Accept", "application/vnd.github+json")
+        .send()
+        .await
+        .map_err(|e| format!("Failed to request releases: {}", e))?;
 
-        let mut cmd = std::process::Command::new("curl");
-        cmd.args(["-sL", "-H", "User-Agent: trayclip", &url]);
-        #[cfg(windows)]
-        cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
-        let output = cmd.output()
-            .map_err(|e| format!("Failed to run curl: {}", e))?;
+    if !response.status().is_success() {
+        return Err(format!("Releases request failed: {}", response.status()));
+    }
 
-        if !output.status.success() {
-            return Err(format!("curl exited with status {}", output.status));
-        }
+    let json: serde_json::Value = response
+        .json()
+        .await
+        .map_err(|e| format!("Failed to parse response: {}", e))?;
 
-        let json: serde_json::Value = serde_json::from_slice(&output.stdout)
-            .map_err(|e| format!("Failed to parse response: {}", e))?;
+    let tag = json["tag_name"].as_str().unwrap_or("").trim_start_matches('v');
+    let body = json["body"].as_str().unwrap_or("").to_string();
+    let has_update = version_compare(tag, &current_version);
 
-        let tag = json["tag_name"].as_str().unwrap_or("").trim_start_matches('v');
-        let body = json["body"].as_str().unwrap_or("").to_string();
-        let has_update = version_compare(tag, &current_version);
+    let assets = json["assets"].as_array().map(|a| a.as_slice()).unwrap_or(&[]);
+    let effective_type = if installer_type.is_empty() { "exe" } else { &installer_type };
+    let download_url = find_asset_url(assets, effective_type).unwrap_or_else(|| {
+        json["html_url"].as_str().unwrap_or("").to_string()
+    });
 
-        let assets = json["assets"].as_array().map(|a| a.as_slice()).unwrap_or(&[]);
-        let effective_type = if installer_type.is_empty() { "exe" } else { &installer_type };
-        let download_url = find_asset_url(assets, effective_type).unwrap_or_else(|| {
-            json["html_url"].as_str().unwrap_or("").to_string()
-        });
-
-        Ok(UpdateInfo {
-            has_update,
-            latest_version: tag.to_string(),
-            download_url,
-            body,
-        })
+    Ok(UpdateInfo {
+        has_update,
+        latest_version: tag.to_string(),
+        download_url,
+        body,
     })
-    .await
-    .map_err(|e| format!("Task failed: {}", e))?;
-
-    info
-}
-
-#[cfg(target_os = "windows")]
-fn detect_windows_install_type() -> &'static str {
-    use std::process::Command;
-
-    let nsis_check = Command::new("reg")
-        .args([
-            "query",
-            "HKCU\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\TrayClip",
-            "/ve",
-        ])
-        .creation_flags(0x08000000) // CREATE_NO_WINDOW
-        .output();
-
-    if let Ok(output) = nsis_check {
-        if output.status.success() {
-            return "exe";
-        }
-    }
-
-    let msi_check = Command::new("reg")
-        .args([
-            "query",
-            "HKCU\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\{com.trayclip.app}",
-            "/ve",
-        ])
-        .creation_flags(0x08000000) // CREATE_NO_WINDOW
-        .output();
-
-    if let Ok(output) = msi_check {
-        if output.status.success() {
-            return "msi";
-        }
-    }
-
-    // Default to exe for new installs
-    "exe"
 }
 
 fn find_asset_url(assets: &[serde_json::Value], _installer_type: &str) -> Option<String> {

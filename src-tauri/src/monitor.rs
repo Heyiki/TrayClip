@@ -109,9 +109,10 @@ impl<R: Runtime> ClipboardHandler for Monitor<R> {
 
             match ingest_result {
                 Ok(cleanup_images) => {
-                    for image in cleanup_images {
-                        let _ = std::fs::remove_file(image);
-                    }
+                    // Paths come from the database (pruned rows), so deletion goes through
+                    // the images-dir allowlist like every other cleanup path - and through the
+                    // lock that keeps a running backup from losing files.
+                    commands::remove_managed_images(&state, cleanup_images);
                     *last_signature = Some(signature);
                     let _ = self.app.emit("clips://updated", ());
                 }

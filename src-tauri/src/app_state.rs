@@ -4,7 +4,7 @@ use parking_lot::{Mutex, RwLock};
 use r2d2::Pool;
 use rusqlite::Connection;
 
-use crate::{models::{AppSettings, PermissionState}, paths::AppPaths};
+use crate::{models::AppSettings, paths::AppPaths};
 
 pub struct SqliteConnectionManager {
     path: std::path::PathBuf,
@@ -41,8 +41,10 @@ pub struct AppState {
     pub pool: DbPool,
     pub paths: AppPaths,
     pub settings: RwLock<AppSettings>,
-    pub permissions: RwLock<PermissionState>,
     pub last_clip_signature: Mutex<Option<String>>,
+    /// Held by backup for its whole run. Image cleanup paths take it too, so a retention
+    /// pass cannot delete a file while an archive is reading it.
+    pub image_cleanup_lock: Mutex<()>,
     #[cfg(target_os = "windows")]
     pub previous_hwnd: Mutex<usize>,
     #[cfg(target_os = "linux")]

@@ -29,6 +29,7 @@ use std::ptr;
 
 #[cfg(target_os = "windows")]
 use windows_sys::Win32::{
+    Foundation::GlobalFree,
     System::{
         DataExchange::{CloseClipboard, EmptyClipboard, GetClipboardData, OpenClipboard, SetClipboardData},
         Memory::{GlobalAlloc, GlobalLock, GlobalUnlock, GMEM_MOVEABLE},
@@ -100,10 +101,13 @@ fn read_clipboard_with_clipboard(paths: &AppPaths, clipboard: &mut Clipboard) ->
     }
 
     if let Ok(image) = clipboard.get_image() {
-        let bytes = image.bytes.as_ref();
-        if bytes.len() > 10 * 1024 * 1024 {
+        // Bounded by pixel count, exactly like the paste path. The old byte cap here was
+        // 10 MiB, which is only 2.6 MP once RGBA is accounted for — it silently dropped
+        // every 2560x1440 screenshot.
+        if ensure_image_data_size(&image).is_err() {
             return Ok(None);
         }
+        let bytes = image.bytes.as_ref();
         let width = image.width;
         let height = image.height;
         let content_hash = format!("{:x}", Sha256::digest(bytes));
@@ -160,11 +164,10 @@ fn peek_signature_with_clipboard(_paths: &AppPaths, clipboard: &mut Clipboard) -
     }
 
     if let Ok(image) = clipboard.get_image() {
-        let bytes = image.bytes.as_ref();
-        if bytes.len() > 10 * 1024 * 1024 {
+        if ensure_image_data_size(&image).is_err() {
             return Ok(None);
         }
-        return Ok(Some(format!("{:x}", Sha256::digest(bytes))));
+        return Ok(Some(format!("{:x}", Sha256::digest(image.bytes.as_ref()))));
     }
 
     Ok(None)
@@ -192,7 +195,52 @@ pub fn write_image_path_with_state(file_path: &str, clipboard: &mut Clipboard) -
     write_image_path_with_clipboard(file_path, clipboard)
 }
 
+/// Decoded RGBA costs `width * height * 4` bytes, so a few hundred kilobytes of PNG can
+/// still expand into gigabytes. Both limits are read from the header, before any pixel
+/// data is decoded.
+const MAX_IMAGE_EDGE: u32 = 8192;
+const MAX_IMAGE_PIXELS: u64 = 40_000_000;
+
+fn ensure_image_dimensions(width: u32, height: u32) -> anyhow::Result<()> {
+    let pixels = u64::from(width) * u64::from(height);
+    if width == 0 || height == 0 || width > MAX_IMAGE_EDGE || height > MAX_IMAGE_EDGE || pixels > MAX_IMAGE_PIXELS {
+        anyhow::bail!(
+            "image is too large: {}x{} ({} px), the limit is {}x{} or {} px",
+            width,
+            height,
+            pixels,
+            MAX_IMAGE_EDGE,
+            MAX_IMAGE_EDGE,
+            MAX_IMAGE_PIXELS
+        );
+    }
+    Ok(())
+}
+
+fn ensure_file_image_dimensions(file_path: &str) -> anyhow::Result<()> {
+    let (width, height) = image::ImageReader::open(file_path)
+        .with_context(|| format!("failed to open image: {}", file_path))?
+        .with_guessed_format()
+        .with_context(|| format!("failed to detect image format: {}", file_path))?
+        .into_dimensions()
+        .with_context(|| format!("failed to read image dimensions: {}", file_path))?;
+    ensure_image_dimensions(width, height)
+}
+
+/// Same limits for images that are already decoded, so capturing a screenshot and pasting
+/// it back can never disagree about what counts as too large. `try_from` keeps an
+/// out-of-range dimension from being truncated into a small, accepted one.
+fn ensure_image_data_size(image: &ImageData<'_>) -> anyhow::Result<()> {
+    ensure_image_dimensions(
+        u32::try_from(image.width).unwrap_or(u32::MAX),
+        u32::try_from(image.height).unwrap_or(u32::MAX),
+    )
+}
+
 fn write_image_path_with_clipboard(file_path: &str, clipboard: &mut Clipboard) -> anyhow::Result<()> {
+    // Check the header first: `image::open` would otherwise decode the whole thing, and a
+    // 20000x20000 PNG needs 1.6 GB once converted to RGBA8.
+    ensure_file_image_dimensions(file_path)?;
     let image = image::open(file_path)
         .with_context(|| format!("failed to open image: {}", file_path))?
         .into_rgba8();
@@ -222,6 +270,7 @@ fn write_clipboard_with_clipboard(record: &ClipRecord, clipboard: &mut Clipboard
         }
         ClipContentType::Image => {
             if let Some(path) = &record.image_path {
+                ensure_file_image_dimensions(path)?;
                 let image = image::open(path)?.into_rgba8();
                 let width = image.width() as usize;
                 let height = image.height() as usize;
@@ -298,6 +347,10 @@ fn save_image(paths: &AppPaths, image: ImageData<'_>, digest: &str) -> anyhow::R
     if output_path.exists() {
         return Ok(output_path);
     }
+
+    // The payload is already decoded by `get_image`, but a header claiming an absurd
+    // pixel count would still be turned into a matching buffer right below.
+    ensure_image_data_size(&image)?;
 
     let buffer = image::ImageBuffer::<image::Rgba<u8>, _>::from_raw(image.width as u32, image.height as u32, image.bytes.into_owned())
         .context("failed to construct image buffer")?;
@@ -398,6 +451,7 @@ fn set_windows_file_paths(file_paths: &[String]) -> anyhow::Result<()> {
 
         let locked = GlobalLock(handle) as *mut u8;
         if locked.is_null() {
+            GlobalFree(handle);
             anyhow::bail!("failed to lock clipboard memory");
         }
 
@@ -412,14 +466,46 @@ fn set_windows_file_paths(file_paths: &[String]) -> anyhow::Result<()> {
         GlobalUnlock(handle);
 
         if OpenClipboard(ptr::null_mut()) == 0 {
+            GlobalFree(handle);
             anyhow::bail!("failed to open clipboard");
         }
         let _scope = ClipboardScope;
         EmptyClipboard();
         if SetClipboardData(CF_HDROP, handle).is_null() {
+            // Ownership only transfers to the system when the call succeeds, so every
+            // failure path above and here has to release the block itself.
+            GlobalFree(handle);
             anyhow::bail!("failed to set clipboard data");
         }
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ensure_image_dimensions;
+
+    #[test]
+    fn ensure_image_dimensions_accepts_typical_screenshots() {
+        assert!(ensure_image_dimensions(1920, 1080).is_ok());
+        // 2560x1440 is 14 MiB as RGBA: the old byte cap used to drop it.
+        assert!(ensure_image_dimensions(2560, 1440).is_ok());
+        assert!(ensure_image_dimensions(3840, 2160).is_ok());
+        // Exactly at the pixel budget, still inside the edge limit.
+        assert!(ensure_image_dimensions(8000, 5000).is_ok());
+    }
+
+    #[test]
+    fn ensure_image_dimensions_rejects_pixel_overrun() {
+        assert!(ensure_image_dimensions(8001, 5000).is_err());
+    }
+
+    #[test]
+    fn ensure_image_dimensions_rejects_edge_overrun_and_empty_sizes() {
+        assert!(ensure_image_dimensions(8193, 100).is_err());
+        assert!(ensure_image_dimensions(100, 8193).is_err());
+        assert!(ensure_image_dimensions(0, 100).is_err());
+        assert!(ensure_image_dimensions(100, 0).is_err());
     }
 }

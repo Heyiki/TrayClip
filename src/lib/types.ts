@@ -1,10 +1,17 @@
 export type ClipContentType = "plain_text" | "rich_text" | "image" | "file_paths";
 
-export interface ClipRecord {
+/**
+ * One row of the history list. `preview` is the only text the backend sends: a page of
+ * large clips would otherwise serialize megabytes over IPC on every refresh. Full text is
+ * fetched per clip through `getClipText` when an action actually needs it.
+ */
+export interface ClipListItem {
   id: number;
   content_type: ClipContentType;
-  plain_text: string | null;
-  rich_text: string | null;
+  preview: string;
+  preview_truncated: boolean;
+  /** Whether the stored text contains a link, computed over the full text by the backend. */
+  has_url: boolean;
   summary: string;
   image_path: string | null;
   file_paths: string[];
@@ -59,14 +66,9 @@ export interface ListClipsRequest {
 }
 
 export interface ListClipsResponse {
-  items: ClipRecord[];
+  items: ClipListItem[];
   total: number;
   has_more: boolean;
-}
-
-export interface PermissionState {
-  accessibility_granted: boolean;
-  accessibility_required_for_paste: boolean;
 }
 
 export interface BootstrapPayload {
@@ -74,13 +76,11 @@ export interface BootstrapPayload {
   groups: ClipGroup[];
   settings: AppSettings;
   hotkeys: HotkeySetting[];
-  permissions: PermissionState;
 }
 
 export interface ConfigPayload {
   settings: AppSettings;
   hotkeys: HotkeySetting[];
-  permissions: PermissionState;
 }
 
 export type TabKey = "clips" | "settings" | "about";

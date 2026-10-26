@@ -1,11 +1,11 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import type { AppSettings, ClipGroup, ClipRecord } from "@/lib/types";
+import type { AppSettings, ClipGroup, ClipListItem } from "@/lib/types";
 import { useTranslation } from "@/lib/i18n";
 import { ClipCard } from "@/components/ClipCard";
 
 interface ClipListProps {
-    clips: ClipRecord[];
+    clips: ClipListItem[];
     groups: ClipGroup[];
     settings: AppSettings;
     scrollRef?: React.RefObject<HTMLDivElement | null>;

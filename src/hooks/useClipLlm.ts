@@ -1,6 +1,6 @@
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { AppSettings } from "@/lib/types";
-import { extractKeywords, summarizeText } from "@/lib/llm";
+import { extractKeywords, isLLMTimeoutError, summarizeText } from "@/lib/llm";
 import { useTranslation } from "@/lib/i18n";
 
 interface LlmState {
@@ -16,6 +16,10 @@ export function useClipLlm(settings: AppSettings) {
     const { t } = useTranslation();
     const [llmState, setLlmState] = useState<LlmState>(IDLE);
     const abortRef = useRef<AbortController | null>(null);
+
+    // Cards unmount while a request is in flight whenever the list reloads or the card
+    // scrolls out of the virtual window; abort instead of resolving into a dead component.
+    useEffect(() => () => abortRef.current?.abort(), []);
 
     const config = useMemo(
         () => ({ apiUrl: settings.llm_api_url, apiKey: settings.llm_api_key, model: settings.llm_model }),
@@ -43,20 +47,24 @@ export function useClipLlm(settings: AppSettings) {
         try {
             const keywords = await extractKeywords(config, text, signal);
             setLlmState({ loading: false, action: "", result: keywords, error: null });
-        } catch {
-            if (!signal.aborted) setLlmState({ loading: false, action: "", result: null, error: t.aiFailed });
+        } catch (error) {
+            // An aborted signal means the dialog is already gone; only real failures reset
+            // the loading state, and a stalled request gets its own message.
+            if (signal.aborted) return;
+            setLlmState({ loading: false, action: "", result: null, error: isLLMTimeoutError(error) ? t.aiTimeout : t.aiFailed });
         }
-    }, [config, start, t.extractKeywords, t.aiFailed]);
+    }, [config, start, t.extractKeywords, t.aiFailed, t.aiTimeout]);
 
     const handleSummarize = useCallback(async (text: string) => {
         const signal = start(t.aiSummarize);
         try {
             const summary = await summarizeText(config, text, signal);
             setLlmState({ loading: false, action: "", result: summary, error: null });
-        } catch {
-            if (!signal.aborted) setLlmState({ loading: false, action: "", result: null, error: t.aiFailed });
+        } catch (error) {
+            if (signal.aborted) return;
+            setLlmState({ loading: false, action: "", result: null, error: isLLMTimeoutError(error) ? t.aiTimeout : t.aiFailed });
         }
-    }, [config, start, t.aiSummarize, t.aiFailed]);
+    }, [config, start, t.aiSummarize, t.aiFailed, t.aiTimeout]);
 
     return { llmState, enabled, config, close, handleExtractKeywords, handleSummarize };
 }

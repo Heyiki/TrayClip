@@ -1,7 +1,8 @@
 import { useEffect, type RefObject } from "react";
 import { listen } from "@tauri-apps/api/event";
-import { hideWindow, quitApp } from "@/lib/api";
+import { hideWindow } from "@/lib/api";
 import type { AppSettings, ConfirmState } from "@/lib/types";
+import { useCloseWindowAction } from "@/hooks/useCloseWindowAction";
 
 interface UseAppEventsParams {
     loadClips: (groupId?: number | null) => Promise<void>;
@@ -34,6 +35,9 @@ export function useAppEvents({
                                  setConfirm,
                                  t,
                              }: UseAppEventsParams) {
+    // Same handler the title bar uses, so `close_behavior` means one thing everywhere.
+    const handleCloseWindow = useCloseWindowAction(settingsRef, setConfirm, t);
+
     // Tauri event listeners
     useEffect(() => {
         const unlistens: (() => void)[] = [];
@@ -43,33 +47,27 @@ export function useAppEvents({
             unlistens.push(fn);
         };
 
-        void listen("clips://updated", () => { void loadClips(); }).then(register);
+        // Copying several items in a row fires one event each. Coalescing them keeps the
+        // list from being re-queried and re-rendered for every single event.
+        let refreshTimer: number | undefined;
+        void listen("clips://updated", () => {
+            window.clearTimeout(refreshTimer);
+            refreshTimer = window.setTimeout(() => { void loadClips(); }, 200);
+        }).then(register);
         void listen("focus-main-search", () => {
             scrollRef.current?.scrollTo(0, 0);
             focusSearch(true);
         }).then(register);
         void listen("close-requested", () => {
-            const behavior = settingsRef.current.close_behavior;
-            if (behavior === "hide") {
-                void hideWindow();
-            } else if (behavior === "exit") {
-                void quitApp();
-            } else {
-                setConfirm({
-                    message: t.confirmClose,
-                    confirmLabel: t.hideToTray,
-                    cancelLabel: t.exitApp,
-                    onConfirm: async () => { await hideWindow(); },
-                    onCancel: async () => { await quitApp(); },
-                });
-            }
+            handleCloseWindow();
         }).then(register);
 
         return () => {
             cancelled = true;
+            window.clearTimeout(refreshTimer);
             unlistens.forEach((fn) => fn());
         };
-    }, [focusSearch, loadClips, scrollRef, setConfirm, settingsRef, t.confirmClose, t.exitApp, t.hideToTray]);
+    }, [focusSearch, handleCloseWindow, loadClips, scrollRef]);
 
     // Escape key handler
     useEffect(() => {

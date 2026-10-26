@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { emit } from "@tauri-apps/api/event";
-import { open, save } from "@tauri-apps/plugin-dialog";
+import { message, open, save } from "@tauri-apps/plugin-dialog";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
     backupData,
@@ -19,9 +19,18 @@ import {
     updateSettings,
 } from "@/lib/api";
 import { FALLBACK_BOOTSTRAP } from "@/lib/constants";
-import type { AppSettings, BootstrapPayload, ClipGroup } from "@/lib/types";
+import type { AppSettings, BootstrapPayload, ListClipsRequest } from "@/lib/types";
 
 const CLIPS_PAGE_SIZE = 50;
+
+// One place that assembles a page request, so fetching another page can never drop the
+// keyword or the group the current list is already filtered by.
+const clipsQuery = (page: number, groupId: number | null, keyword: string): ListClipsRequest => ({
+    page,
+    page_size: CLIPS_PAGE_SIZE,
+    keyword: keyword || undefined,
+    group_id: groupId ?? undefined,
+});
 
 export function useAppData() {
     const [state, setState] = useState<BootstrapPayload>(FALLBACK_BOOTSTRAP);
@@ -72,7 +81,7 @@ export function useAppData() {
             const gid = groupId === undefined ? selectedGroupIdRef.current : groupId;
             const query = keyword === undefined ? clipsKeywordRef.current : keyword.trim();
             clipsKeywordRef.current = query;
-            const clips = await listClips({ page: 1, page_size: CLIPS_PAGE_SIZE, keyword: query || undefined, group_id: gid ?? undefined });
+            const clips = await listClips(clipsQuery(1, gid, query));
             if (requestId !== clipsRequestIdRef.current) return;
             clipsPageRef.current = 1;
             clipsHasMoreRef.current = clips.has_more;
@@ -87,15 +96,10 @@ export function useAppData() {
         if (clipsLoadingRef.current || !clipsHasMoreRef.current) return;
         const requestId = clipsRequestIdRef.current;
         const nextPage = clipsPageRef.current + 1;
-        const gid = selectedGroupIdRef.current;
+        const query = clipsKeywordRef.current;
         clipsLoadingRef.current = true;
         try {
-            const nextClips = await listClips({
-                page: nextPage,
-                page_size: CLIPS_PAGE_SIZE,
-                keyword: clipsKeywordRef.current || undefined,
-                group_id: gid ?? undefined,
-            });
+            const nextClips = await listClips(clipsQuery(nextPage, selectedGroupIdRef.current, query));
             if (requestId !== clipsRequestIdRef.current) return;
             clipsPageRef.current = nextPage;
             clipsHasMoreRef.current = nextClips.has_more;
@@ -116,18 +120,12 @@ export function useAppData() {
     const reloadLoadedClips = useCallback(async () => {
         const requestId = ++clipsRequestIdRef.current;
         const loadedPage = Math.max(1, clipsPageRef.current);
-        const gid = selectedGroupIdRef.current;
         const query = clipsKeywordRef.current;
         clipsLoadingRef.current = true;
         try {
             const responses = await Promise.all(
                 Array.from({ length: loadedPage }, (_, index) =>
-                    listClips({
-                        page: index + 1,
-                        page_size: CLIPS_PAGE_SIZE,
-                        keyword: query || undefined,
-                        group_id: gid ?? undefined,
-                    }),
+                    listClips(clipsQuery(index + 1, selectedGroupIdRef.current, query)),
                 ),
             );
             if (requestId !== clipsRequestIdRef.current) return;
@@ -156,12 +154,7 @@ export function useAppData() {
                 const [cfg, groups, clips] = await Promise.all([
                     getConfig(),
                     listGroups(),
-                    listClips({
-                        page: 1,
-                        page_size: CLIPS_PAGE_SIZE,
-                        keyword: clipsKeywordRef.current || undefined,
-                        group_id: selectedGroupIdRef.current ?? undefined,
-                    }),
+                    listClips(clipsQuery(1, selectedGroupIdRef.current, clipsKeywordRef.current)),
                 ]);
                 if (requestId !== clipsRequestIdRef.current) return;
                 clipsPageRef.current = 1;
@@ -247,7 +240,14 @@ export function useAppData() {
             defaultPath: `trayclip-backup-${new Date().toISOString().slice(0, 10)}.zip`,
         });
         if (!filePath) return;
-        await backupData(filePath);
+        try {
+            await backupData(filePath);
+        } catch (error) {
+            // The backend refuses archives it could not restore, so the verdict has to reach
+            // the user instead of dying as an unhandled rejection.
+            console.error("[TrayClip] backup failed:", error);
+            await message(String(error), { title: "TrayClip", kind: "error" });
+        }
     }, []);
 
     const restoreConfirmed = useCallback(async () => {
@@ -256,8 +256,13 @@ export function useAppData() {
             filters: [{ name: "TrayClip Backup", extensions: ["zip"] }],
         });
         if (!filePath) return;
-        await restoreBackup(filePath as string);
-        await loadAll();
+        try {
+            await restoreBackup(filePath as string);
+            await loadAll();
+        } catch (error) {
+            console.error("[TrayClip] restore failed:", error);
+            await message(String(error), { title: "TrayClip", kind: "error" });
+        }
     }, [loadAll]);
 
     const handleRecopy = useCallback(async (clipId: number) => {

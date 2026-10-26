@@ -6,7 +6,6 @@ export const zh = {
   confirm: "确认",
   cancel: "取消",
   delete: "删除",
-  search: "搜索",
   settings: "设置",
   about: "关于",
   all: "全部",
@@ -122,6 +121,7 @@ export const zh = {
   aiResult: "AI 结果",
   copyResult: "复制",
   aiFailed: "AI 请求失败，请检查配置",
+  aiTimeout: "AI 请求超时，请检查网络或 API 地址",
   aiDisclaimer: "以上内容由 AI 生成，请仔细甄别后使用",
 
   // 翻译

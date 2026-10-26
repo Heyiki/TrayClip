@@ -27,6 +27,31 @@ pub struct ClipRecord {
     pub last_used_at: Option<String>,
 }
 
+/// One row of the history list. Full text is deliberately absent: a page of fifty clips can
+/// hold megabytes of text, and every refresh would serialize all of it over IPC. `preview`
+/// is enough to render the card and to spot a URL or a JSON head; the full text is fetched
+/// on demand through `get_clip_text`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ClipListItem {
+    pub id: i64,
+    pub content_type: ClipContentType,
+    pub preview: String,
+    pub preview_truncated: bool,
+    /// Whether the stored text contains a link. Computed by SQL over the full text, so the
+    /// menu entry survives a link that starts past the preview cut.
+    pub has_url: bool,
+    pub summary: String,
+    pub image_path: Option<String>,
+    pub file_paths: Vec<String>,
+    pub source_app: String,
+    pub is_pinned: bool,
+    pub is_truncated: bool,
+    pub group_id: Option<i64>,
+    pub created_at: String,
+    pub updated_at: String,
+    pub last_used_at: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ClipGroup {
     pub id: i64,
@@ -86,21 +111,6 @@ pub struct HotkeySetting {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PermissionState {
-    pub accessibility_granted: bool,
-    pub accessibility_required_for_paste: bool,
-}
-
-impl Default for PermissionState {
-    fn default() -> Self {
-        Self {
-            accessibility_granted: cfg!(not(target_os = "macos")),
-            accessibility_required_for_paste: true,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ListClipsRequest {
     pub page: i64,
     pub page_size: i64,
@@ -111,7 +121,7 @@ pub struct ListClipsRequest {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ListClipsResponse {
-    pub items: Vec<ClipRecord>,
+    pub items: Vec<ClipListItem>,
     pub total: i64,
     pub has_more: bool,
 }
@@ -120,7 +130,6 @@ pub struct ListClipsResponse {
 pub struct ConfigPayload {
     pub settings: AppSettings,
     pub hotkeys: Vec<HotkeySetting>,
-    pub permissions: PermissionState,
 }
 
 #[derive(Debug, Clone)]

@@ -4792,7 +4792,6 @@ version = "0.2.12"
 dependencies = [
  "anyhow",
  "arboard",
- "base64 0.22.1",
  "chrono",
  "clipboard-master",
  "image",
@@ -4808,10 +4807,10 @@ dependencies = [
  "tauri-build",
  "tauri-plugin-autostart",
  "tauri-plugin-dialog",
- "tauri-plugin-fs",
  "tauri-plugin-global-shortcut",
  "tauri-plugin-opener",
  "tauri-plugin-single-instance",
+ "tempfile",
  "windows-sys 0.61.2",
  "zip",
 ]

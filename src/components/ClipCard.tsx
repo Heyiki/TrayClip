@@ -1,7 +1,7 @@
 import { memo, useCallback, useMemo, useState } from "react";
 import { Copy, Expand, Pin, PinOff, Trash2 } from "lucide-react";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import type { AppSettings, ClipGroup, ClipRecord } from "@/lib/types";
+import type { AppSettings, ClipGroup, ClipListItem } from "@/lib/types";
 import { useTranslation } from "@/lib/i18n";
 import { useImagePreview } from "@/hooks/useImagePreview";
 import { useClipLlm } from "@/hooks/useClipLlm";
@@ -18,7 +18,7 @@ import { GroupSelect } from "@/components/GroupSelect";
 import { LLMResultDialog } from "@/components/LLMResultDialog";
 import { TranslateDialog } from "@/components/TranslateDialog";
 import { ImagePreviewDialog } from "@/components/ImagePreviewDialog";
-import { recopyImage } from "@/lib/api";
+import { getClipText, recopyImage } from "@/lib/api";
 
 const IMAGE_EXTENSIONS = new Set([
   ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp", ".ico", ".tiff", ".tif", ".svg",
@@ -84,7 +84,7 @@ function TypeTag({ type, label }: { type: string; label: string }) {
 }
 
 interface ClipCardProps {
-  clip: ClipRecord;
+  clip: ClipListItem;
   selected: boolean;
   groups: ClipGroup[];
   settings: AppSettings;
@@ -140,9 +140,28 @@ export const ClipCard = memo(function ClipCard({
 
   const { llmState, enabled: llmEnabled, config: llmConfig, close: closeLlmDialog, handleExtractKeywords, handleSummarize } = useClipLlm(settings);
   const [translateOpen, setTranslateOpen] = useState(false);
+  const [translateText, setTranslateText] = useState<string | null>(null);
+
+  // A list row only carries a preview, so anything that works on the whole clip has to read
+  // it back first. The preview is the fallback when that read fails.
+  const withFullText = useCallback(async (action: (text: string) => void | Promise<void>) => {
+    let text = clip.preview;
+    try {
+      text = await getClipText(clip.id);
+    } catch (error) {
+      console.error("[TrayClip] failed to load full clip text:", error);
+    }
+    const trimmed = text.trim();
+    if (trimmed) await action(trimmed);
+  }, [clip.id, clip.preview]);
 
   const handleJsonCopy = useCallback(async () => {
-    const text = clip.plain_text;
+    let text = clip.preview;
+    try {
+      text = await getClipText(clip.id);
+    } catch (error) {
+      console.error("[TrayClip] failed to load full clip text:", error);
+    }
     if (text) {
       try {
         const formatted = JSON.stringify(JSON.parse(text), null, 2);
@@ -153,11 +172,36 @@ export const ClipCard = memo(function ClipCard({
       }
     }
     onRecopy(clip.id);
-  }, [clip.id, clip.plain_text, onRecopy]);
+  }, [clip.id, clip.preview, onRecopy]);
 
-  const url = useMemo(() => clip.plain_text ? extractUrl(clip.plain_text) : null, [clip.plain_text]);
-  const json = useMemo(() => clip.plain_text ? isJson(clip.plain_text) : false, [clip.plain_text]);
-  const textContent = clip.plain_text?.trim();
+  // The preview can be cut before the link, so opening re-reads the full text: a truncated
+  // URL would open the wrong page. If the full text cannot be loaded the click does
+  // nothing, which beats opening a link that is missing its tail.
+  const handleOpenLink = useCallback(async () => {
+    let text = clip.preview;
+    if (clip.preview_truncated) {
+      try {
+        text = await getClipText(clip.id);
+      } catch (error) {
+        console.error("[TrayClip] failed to load full clip text:", error);
+        return;
+      }
+    }
+    const fullUrl = extractUrl(text);
+    if (fullUrl) await openUrl(fullUrl);
+  }, [clip.id, clip.preview, clip.preview_truncated]);
+
+  // A long JSON document is cut by the preview limit, so a truncated preview that starts
+  // like an object or an array still counts as JSON: copying re-reads the full text and
+  // falls back to a plain copy if it does not parse either.
+  const json = useMemo(() => {
+    if (!clip.preview) return false;
+    if (isJson(clip.preview)) return true;
+    if (!clip.preview_truncated) return false;
+    const head = clip.preview.trimStart();
+    return head.startsWith("{") || head.startsWith("[");
+  }, [clip.preview, clip.preview_truncated]);
+  const hasText = Boolean(clip.preview.trim());
 
   return (
       <ContextMenu>
@@ -239,7 +283,7 @@ export const ClipCard = memo(function ClipCard({
                       </div>
                   )
               ) : (
-                  <div className="line-clamp-1 break-all text-sm text-foreground/80" title={clip.plain_text || clip.summary}>
+                  <div className="line-clamp-1 break-all text-sm text-foreground/80" title={clip.summary}>
                     {clip.summary}
                   </div>
               )}
@@ -311,41 +355,49 @@ export const ClipCard = memo(function ClipCard({
             )}
 
             {/* Translate Dialog */}
-            {translateOpen && textContent ? (
+            {translateOpen && translateText ? (
                 <TranslateDialog
-                    text={textContent}
+                    text={translateText}
                     llmConfig={llmConfig}
                     llmEnabled={llmEnabled}
                     aiTranslate={settings.llm_ai_translate}
-                    onClose={() => setTranslateOpen(false)}
+                    onClose={() => {
+                      setTranslateOpen(false);
+                      setTranslateText(null);
+                    }}
                 />
             ) : null}
           </div>
         </ContextMenuTrigger>
 
         <ContextMenuContent>
-          {url ? (
-              <ContextMenuItem onClick={() => void openUrl(url)}>
+          {clip.has_url ? (
+              <ContextMenuItem onClick={() => void handleOpenLink()}>
                 {t.openLink}
               </ContextMenuItem>
           ) : null}
           <ContextMenuItem onClick={() => void handleJsonCopy()}>
             {json ? t.jsonCopy : t.copy}
           </ContextMenuItem>
-          {textContent ? (
+          {hasText ? (
               <>
                 <ContextMenuSeparator />
-                <ContextMenuItem onClick={() => setTranslateOpen(true)}>
+                <ContextMenuItem
+                    onClick={() => void withFullText((text) => {
+                      setTranslateText(text);
+                      setTranslateOpen(true);
+                    })}
+                >
                   {t.translate}
                 </ContextMenuItem>
               </>
           ) : null}
-          {llmEnabled && textContent ? (
+          {llmEnabled && hasText ? (
               <>
-                <ContextMenuItem onClick={() => textContent && handleExtractKeywords(textContent)}>
+                <ContextMenuItem onClick={() => void withFullText(handleExtractKeywords)}>
                   {t.extractKeywords}
                 </ContextMenuItem>
-                <ContextMenuItem onClick={() => textContent && handleSummarize(textContent)}>
+                <ContextMenuItem onClick={() => void withFullText(handleSummarize)}>
                   {t.aiSummarize}
                 </ContextMenuItem>
               </>

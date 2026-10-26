@@ -1,11 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { emit } from "@tauri-apps/api/event";
 import { getVersion } from "@tauri-apps/api/app";
-import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
   checkUpdate,
-  hideWindow,
-  quitApp,
   updateHotkey,
 } from "@/lib/api";
 import type { ClipGroup, TabKey } from "@/lib/types";
@@ -13,6 +10,7 @@ import { useTranslation } from "@/lib/i18n";
 import { useConfirmDialog } from "@/hooks/useConfirmDialog";
 import { useAppData } from "@/hooks/useAppData";
 import { useAppEvents } from "@/hooks/useAppEvents";
+import { useCloseWindowAction } from "@/hooks/useCloseWindowAction";
 import { useDebouncedValue } from "@/hooks/useDebouncedValue";
 import { WindowBar } from "@/components/WindowBar";
 import { GroupBar } from "@/components/GroupBar";
@@ -121,6 +119,7 @@ export default function App() {
   const { t, locale, setLocale } = useTranslation();
   const data = useAppData();
   const { confirm, setConfirm, handleConfirm, handleCancel } = useConfirmDialog();
+  const handleWindowClose = useCloseWindowAction(data.settingsRef, setConfirm, t);
 
   // UI state
   const [search, setSearch] = useState("");
@@ -181,19 +180,6 @@ export default function App() {
   }, [data.initialLoadDone, data.loadClips, data.loaded, data.selectedGroupId, debouncedSearch]);
 
   // --- Confirm-based actions ---
-  const handleWindowClose = useCallback(async () => {
-    const behavior = data.settingsRef.current.close_behavior;
-    if (behavior === "hide") { await hideWindow(); return; }
-    if (behavior === "exit") { await quitApp(); return; }
-    setConfirm({
-      message: t.confirmClose,
-      confirmLabel: t.hideToTray,
-      cancelLabel: t.exitApp,
-      onConfirm: async () => { await hideWindow(); },
-      onCancel: async () => { await quitApp(); },
-    });
-  }, [data.settingsRef, setConfirm, t]);
-
   const removeGroup = useCallback((group: ClipGroup) => {
     setConfirm({
       message: t.confirmDeleteGroup(group.name),

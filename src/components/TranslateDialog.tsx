@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { Check, Copy, Languages } from "lucide-react";
 import { bingTranslate } from "@/lib/api";
-import { translateText } from "@/lib/llm";
+import { isLLMTimeoutError, translateText } from "@/lib/llm";
 import type { LLMConfig } from "@/lib/llm";
 import { useTranslation } from "@/lib/i18n";
 import {
@@ -69,8 +69,8 @@ export function TranslateDialog({
         translated = await bingTranslate(inputText, "", targetLang);
       }
       setResult(translated);
-    } catch {
-      setError(t.translateFailed);
+    } catch (error) {
+      setError(isLLMTimeoutError(error) ? t.aiTimeout : t.translateFailed);
     } finally {
       setLoading(false);
     }

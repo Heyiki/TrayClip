@@ -1,5 +1,7 @@
 import type { BootstrapPayload } from "./types";
 
+// Mirrors `AppSettings::default()` on the Rust side; used only when the first IPC round trip
+// fails, so a drifted value here is what the user sees until the next successful load.
 export const FALLBACK_BOOTSTRAP: BootstrapPayload = {
     clips: { items: [], total: 0, has_more: false },
     groups: [],
@@ -20,8 +22,4 @@ export const FALLBACK_BOOTSTRAP: BootstrapPayload = {
         llm_ai_translate: false,
     },
     hotkeys: [],
-    permissions: {
-        accessibility_granted: false,
-        accessibility_required_for_paste: true,
-    },
 };
