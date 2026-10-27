@@ -7,12 +7,13 @@ mod db;
 mod models;
 mod monitor;
 mod paths;
+mod placement;
 mod source_app;
 
 use anyhow::Context;
 use app_state::AppState;
 use parking_lot::{Mutex, RwLock};
-use tauri::{Emitter, Manager, PhysicalPosition, PhysicalSize};
+use tauri::{Emitter, Manager};
 use tauri::menu::{MenuBuilder, MenuItemBuilder};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent};
 use tauri_plugin_global_shortcut::GlobalShortcutExt;
@@ -306,29 +307,27 @@ fn build_state(app: &tauri::AppHandle) -> anyhow::Result<AppState> {
     })
 }
 
-fn resolve_main_window_position(
-    panel_position: &str,
-    monitor_pos: PhysicalPosition<i32>,
-    monitor_size: PhysicalSize<u32>,
-    cursor_pos: Option<PhysicalPosition<f64>>,
-) -> PhysicalPosition<i32> {
-    const WIN_W: i32 = 400;
-    const WIN_H: i32 = 500;
+/// Size of the main window as configured in `tauri.conf.json`, in logical pixels. Used until
+/// the platform reports the real size.
+const MAIN_WINDOW_LOGICAL_WIDTH: f64 = 400.0;
+const MAIN_WINDOW_LOGICAL_HEIGHT: f64 = 500.0;
+/// Gap between the cursor and the window corner when `panel_position` is `follow_mouse`,
+/// in logical pixels so it stays visually identical on displays of any scale.
+const CURSOR_GAP_LOGICAL: f64 = 12.0;
 
-    if panel_position == "follow_mouse" {
-        if let Some(cursor) = cursor_pos {
-            let max_x = monitor_pos.x + monitor_size.width as i32 - WIN_W;
-            let max_y = monitor_pos.y + monitor_size.height as i32 - WIN_H;
-            let x = (cursor.x as i32 + 12).clamp(monitor_pos.x, max_x);
-            let y = (cursor.y as i32 + 12).clamp(monitor_pos.y, max_y);
-            return PhysicalPosition { x, y };
-        }
-    }
-
-    PhysicalPosition {
-        x: monitor_pos.x + (monitor_size.width as i32 - WIN_W) / 2,
-        y: monitor_pos.y + (monitor_size.height as i32 - WIN_H) / 2,
-    }
+/// The single place that decides where the main window appears. Startup positioning and
+/// every `show()` go through it, so the window cannot land in two different spots.
+///
+/// The screen is the one under the pointer (see `placement`), which is what makes the hotkey
+/// predictable on multi-display setups; the work area keeps the window clear of the macOS
+/// menu bar and the Dock.
+fn position_main_window(window: &tauri::WebviewWindow, panel_position: &str) {
+    placement::place(
+        window,
+        panel_position,
+        (MAIN_WINDOW_LOGICAL_WIDTH, MAIN_WINDOW_LOGICAL_HEIGHT),
+        (CURSOR_GAP_LOGICAL, CURSOR_GAP_LOGICAL),
+    );
 }
 
 fn show_main_window(app: &tauri::AppHandle) {
@@ -345,17 +344,8 @@ fn show_main_window(app: &tauri::AppHandle) {
                 *state.previous_hwnd.lock() = hwnd as usize;
             }
         }
-        if let Ok(Some(monitor)) = window.current_monitor() {
-            let state = app.state::<AppState>();
-            let panel_position = state.settings.read().panel_position.clone();
-            let position = resolve_main_window_position(
-                &panel_position,
-                *monitor.position(),
-                *monitor.size(),
-                window.cursor_position().ok(),
-            );
-            let _ = window.set_position(tauri::Position::Physical(position));
-        }
+        let panel_position = app.state::<AppState>().settings.read().panel_position.clone();
+        position_main_window(&window, &panel_position);
         let _ = window.show();
         let _ = window.set_focus();
         let _ = window.emit("focus-main-search", ());
@@ -494,6 +484,12 @@ fn main() {
             app.set_activation_policy(tauri::ActivationPolicy::Accessory);
 
             if let Some(window) = app.get_webview_window("main") {
+                // Positioned before the frontend's first `show()`, so the initial window and
+                // the hotkey-invoked one come from the same computation instead of relying
+                // on where the platform happens to put a freshly created window.
+                let panel_position = app.state::<AppState>().settings.read().panel_position.clone();
+                position_main_window(&window, &panel_position);
+
                 let w = window.clone();
                 window.on_window_event(move |event| {
                     if let tauri::WindowEvent::CloseRequested { api, .. } = event {
@@ -568,33 +564,7 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
-    use tauri::{PhysicalPosition, PhysicalSize};
-
-    use super::{image_file_name, resolve_main_window_position, verify_and_rebase_db};
-
-    #[test]
-    fn resolve_main_window_position_centers_when_panel_position_is_center() {
-        let result = resolve_main_window_position(
-            "center",
-            PhysicalPosition { x: 100, y: 50 },
-            PhysicalSize { width: 1920, height: 1080 },
-            None,
-        );
-
-        assert_eq!(result, PhysicalPosition { x: 860, y: 340 });
-    }
-
-    #[test]
-    fn resolve_main_window_position_follows_mouse_and_clamps_to_monitor_bounds() {
-        let result = resolve_main_window_position(
-            "follow_mouse",
-            PhysicalPosition { x: 0, y: 0 },
-            PhysicalSize { width: 400, height: 500 },
-            Some(PhysicalPosition { x: 390.0, y: 490.0 }),
-        );
-
-        assert_eq!(result, PhysicalPosition { x: 0, y: 0 });
-    }
+    use super::{image_file_name, verify_and_rebase_db};
 
     #[test]
     fn image_file_name_handles_both_separators() {

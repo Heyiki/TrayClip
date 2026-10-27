@@ -609,24 +609,26 @@ fn simulate_paste() -> Result<(), String> {
     Ok(())
 }
 
+/// `url-toast` window geometry as configured in `tauri.conf.json`, in logical pixels. Only
+/// used until the platform reports the real size.
+const TOAST_LOGICAL_WIDTH: f64 = 220.0;
+const TOAST_LOGICAL_HEIGHT: f64 = 44.0;
+/// Offsets from the cursor, also logical so the toast keeps the same visual gap at any scale.
+const TOAST_CURSOR_GAP_LOGICAL: f64 = 16.0;
+const TOAST_CURSOR_LIFT_LOGICAL: f64 = 50.0;
+
 /// Generic helper that works with any runtime — callable from monitor or commands.
 pub fn show_url_toast_window<R: tauri::Runtime>(app: &AppHandle<R>, url: &str) {
     if let Some(window) = app.webview_windows().get("url-toast").cloned() {
         let _ = window.emit("url-toast://show", url);
-        // Position at mouse cursor, clamped to monitor bounds
-        if let Ok(pos) = window.cursor_position() {
-            let toast_w = 220;
-            let toast_h = 44;
-            let mut x = pos.x as i32 + 16;
-            let mut y = pos.y as i32 - 50;
-            if let Ok(Some(monitor)) = window.current_monitor() {
-                let mp = monitor.position();
-                let ms = monitor.size();
-                x = x.clamp(mp.x, mp.x + ms.width as i32 - toast_w);
-                y = y.clamp(mp.y, mp.y + ms.height as i32 - toast_h);
-            }
-            let _ = window.set_position(tauri::Position::Physical(tauri::PhysicalPosition { x, y }));
-        }
+        // Same placement rules as the main window: the screen under the pointer, so a link
+        // copied on one display never parks the toast against another display's edge.
+        crate::placement::place(
+            &window,
+            "follow_mouse",
+            (TOAST_LOGICAL_WIDTH, TOAST_LOGICAL_HEIGHT),
+            (TOAST_CURSOR_GAP_LOGICAL, -TOAST_CURSOR_LIFT_LOGICAL),
+        );
         let _ = window.show();
         let _ = window.set_focus();
     }
