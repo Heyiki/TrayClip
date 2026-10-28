@@ -2,7 +2,6 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { emit } from "@tauri-apps/api/event";
 import { getVersion } from "@tauri-apps/api/app";
 import {
-  checkUpdate,
   updateHotkey,
 } from "@/lib/api";
 import type { ClipGroup, TabKey } from "@/lib/types";
@@ -20,34 +19,16 @@ import { SettingsPanel } from "@/components/SettingsPanel";
 import { Card } from "@/components/ui/card";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Input } from "@/components/ui/input";
+import { useUpdater } from "@/hooks/useUpdater";
+import { UpdateDialog } from "@/components/UpdateDialog";
+import { Toast } from "@/components/ui/toast";
 
 const APP_VERSION = import.meta.env.TAURI_ENV_VERSION ?? "0.0.0";
 
 function AboutPanel() {
   const { t } = useTranslation();
-  const [checking, setChecking] = useState(false);
-  const [result, setResult] = useState<{
-    has_update: boolean;
-    latest_version: string;
-    download_url: string;
-    body: string;
-  } | null>(null);
-  const [error, setError] = useState<string | null>(null);
-
-  const handleCheck = async () => {
-    setChecking(true);
-    setResult(null);
-    setError(null);
-    try {
-      const runtimeVersion = await getVersion();
-      const info = await checkUpdate(runtimeVersion, "exe");
-      setResult(info);
-    } catch (e) {
-      setError(String(e));
-    } finally {
-      setChecking(false);
-    }
-  };
+  const [version, setVersion] = useState(APP_VERSION);
+  useEffect(() => { void getVersion().then(setVersion).catch(() => {}); }, []);
 
   return (
       <ScrollArea className="flex-1">
@@ -59,7 +40,7 @@ function AboutPanel() {
             <h2 className="mb-1.5 text-sm font-semibold">{t.aboutTitle}</h2>
             <p className="mb-3 text-sm text-muted-foreground">{t.aboutDesc}</p>
             <ul className="space-y-1.5 text-[13px] text-muted-foreground">
-              <li>{t.aboutVersion(APP_VERSION)}</li>
+              <li>{t.aboutVersion(version)}</li>
               <li>{t.aboutStorage}</li>
               <li>{t.aboutPlatform}</li>
               <li>{t.aboutLicense}</li>
@@ -75,40 +56,6 @@ function AboutPanel() {
                 </a>
               </li>
             </ul>
-            <div className="mt-3">
-              <button
-                  className="inline-flex items-center rounded-md border border-input bg-background px-3 py-1.5 text-xs hover:bg-accent hover:text-accent-foreground disabled:opacity-50"
-                  onClick={() => void handleCheck()}
-                  disabled={checking}
-              >
-                {checking ? t.checking : t.checkUpdate}
-              </button>
-            </div>
-            {result ? (
-                <div className="mt-3">
-                  {result.has_update ? (
-                      <>
-                        <p className="text-sm font-medium text-primary">{t.newVersion(result.latest_version)}</p>
-                        {result.body ? (
-                            <pre className="mt-1.5 max-h-[120px] overflow-y-auto whitespace-pre-wrap rounded-md border bg-muted p-2 text-xs text-muted-foreground">
-                      {result.body}
-                    </pre>
-                        ) : null}
-                        <a
-                            href={result.download_url}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="mt-2 inline-block text-xs text-primary hover:underline"
-                        >
-                          {t.goToDownload}
-                        </a>
-                      </>
-                  ) : (
-                      <p className="mt-2 text-xs text-muted-foreground">{t.upToDate}</p>
-                  )}
-                </div>
-            ) : null}
-            {error ? <p className="mt-2 text-xs text-destructive">{t.checkFailed(error)}</p> : null}
           </Card>
         </div>
       </ScrollArea>
@@ -118,6 +65,7 @@ function AboutPanel() {
 export default function App() {
   const { t, locale, setLocale } = useTranslation();
   const data = useAppData();
+  const updater = useUpdater();
   const { confirm, setConfirm, handleConfirm, handleCancel } = useConfirmDialog();
   const handleWindowClose = useCloseWindowAction(data.settingsRef, setConfirm, t);
 
@@ -221,6 +169,9 @@ export default function App() {
             onThemeToggle={() => setTheme((th) => (th === "light" ? "dark" : "light"))}
             onLanguageToggle={() => setLocale(locale === "zh-CN" ? "en" : "zh-CN")}
             onClose={() => void handleWindowClose()}
+            onCheckUpdate={() => void updater.check()}
+            updateAvailable={Boolean(updater.update)}
+            updateChecking={updater.checking}
             onDragStart={() => { data.isDragging.current = true; }}
             onDragEnd={() => { data.isDragging.current = false; }}
         />
@@ -292,6 +243,13 @@ export default function App() {
           {data.loaded && activeTab === "about" ? <AboutPanel /> : null}
         </div>
 
+        <UpdateDialog
+            update={updater.update}
+            checking={updater.checking}
+            open={updater.open}
+            onOpenChange={updater.setOpen}
+        />
+        <Toast message={updater.notice} onDismiss={updater.dismissNotice} />
         {/* Confirm Dialog */}
         {confirm ? (
             <ConfirmDialog

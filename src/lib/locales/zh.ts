@@ -72,7 +72,11 @@ export const zh = {
   checking: "检查中...",
   checkUpdate: "检查更新",
   newVersion: (v: string) => `发现新版本 v${v}`,
+  viewUpdate: "查看更新",
   goToDownload: "前往下载",
+  updateLater: "稍后",
+  updateBackground: "关闭",
+  updateNoNotes: "此版本暂无更新说明。",
   upToDate: "已是最新版本",
   checkFailed: (err: string) => `检查失败：${err}`,
 

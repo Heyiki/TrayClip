@@ -4,6 +4,7 @@ import { bingTranslate } from "@/lib/api";
 import { isLLMTimeoutError, translateText } from "@/lib/llm";
 import type { LLMConfig } from "@/lib/llm";
 import { useTranslation } from "@/lib/i18n";
+import { normalizeForTranslation } from "@/lib/utils";
 import {
   Dialog,
   DialogContent,
@@ -54,19 +55,21 @@ export function TranslateDialog({
   const [result, setResult] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
-  const [inputText, setInputText] = useState(text);
+  const [inputText, setInputText] = useState(() => normalizeForTranslation(text));
 
   const handleTranslate = async () => {
     setLoading(true);
     setResult(null);
     setError(null);
     try {
+      // The textarea stays editable, so underscores typed after opening are normalized here too.
+      const payload = normalizeForTranslation(inputText);
       let translated: string;
       if (useAI) {
         const lang = LANGUAGES.find((l) => l.code === targetLang);
-        translated = await translateText(llmConfig, inputText, lang?.llmCode ?? targetLang);
+        translated = await translateText(llmConfig, payload, lang?.llmCode ?? targetLang);
       } else {
-        translated = await bingTranslate(inputText, "", targetLang);
+        translated = await bingTranslate(payload, "", targetLang);
       }
       setResult(translated);
     } catch (error) {

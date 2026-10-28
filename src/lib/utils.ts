@@ -2,7 +2,7 @@ import { clsx, type ClassValue } from "clsx"
 import { twMerge } from "tailwind-merge"
 
 export function cn(...inputs: ClassValue[]) {
-  return twMerge(clsx(inputs))
+    return twMerge(clsx(inputs))
 }
 
 export function isJson(text: string): boolean {
@@ -15,6 +15,18 @@ export function isJson(text: string): boolean {
     } catch {
         return false;
     }
+}
+
+/// Translation engines mangle `snake_case` identifiers, so text is normalized right before it
+/// is sent: underscores become spaces, blank runs collapse, and each line is trimmed. Only the
+/// request is rewritten — the clipboard record itself always keeps its original form.
+/// Idempotent, so callers may normalize both the initial value and the payload.
+export function normalizeForTranslation(text: string): string {
+    return text
+        .replace(/_/g, " ")
+        .replace(/[ \t]+/g, " ")
+        .replace(/^ +| +$/gm, "")
+        .trim();
 }
 
 export function extractUrl(text: string): string | null {
