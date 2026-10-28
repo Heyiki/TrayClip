@@ -4,7 +4,7 @@ import { getVersion } from "@tauri-apps/api/app";
 import {
   updateHotkey,
 } from "@/lib/api";
-import type { ClipGroup, TabKey } from "@/lib/types";
+import type { ClipGroup, ClipTypeFilter, TabKey } from "@/lib/types";
 import { useTranslation } from "@/lib/i18n";
 import { useConfirmDialog } from "@/hooks/useConfirmDialog";
 import { useAppData } from "@/hooks/useAppData";
@@ -14,11 +14,11 @@ import { useDebouncedValue } from "@/hooks/useDebouncedValue";
 import { WindowBar } from "@/components/WindowBar";
 import { GroupBar } from "@/components/GroupBar";
 import { ClipList } from "@/components/ClipList";
+import { ClipTypeToken } from "@/components/ClipTypeToken";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { SettingsPanel } from "@/components/SettingsPanel";
 import { Card } from "@/components/ui/card";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { Input } from "@/components/ui/input";
 import { useUpdater } from "@/hooks/useUpdater";
 import { UpdateDialog } from "@/components/UpdateDialog";
 import { Toast } from "@/components/ui/toast";
@@ -117,7 +117,7 @@ export default function App() {
   // cannot trigger two competing first-page requests.
   useEffect(() => {
     if (!data.loaded || !data.initialLoadDone.current) return;
-    const queryKey = `${data.selectedGroupId ?? "all"}:${debouncedSearch}`;
+    const queryKey = `${data.selectedGroupId ?? "all"}:${data.typeFilter}:${debouncedSearch}`;
     if (previousQueryRef.current === "") {
       previousQueryRef.current = queryKey;
       return;
@@ -125,7 +125,7 @@ export default function App() {
     if (previousQueryRef.current === queryKey) return;
     previousQueryRef.current = queryKey;
     void data.loadClips(data.selectedGroupId, debouncedSearch).then(() => setSearchResetKey((key) => key + 1));
-  }, [data.initialLoadDone, data.loadClips, data.loaded, data.selectedGroupId, debouncedSearch]);
+  }, [data.initialLoadDone, data.loadClips, data.loaded, data.selectedGroupId, data.typeFilter, debouncedSearch]);
 
   // --- Confirm-based actions ---
   const removeGroup = useCallback((group: ClipGroup) => {
@@ -161,6 +161,20 @@ export default function App() {
     });
   }, [data.restoreConfirmed, setConfirm, t]);
 
+  const typeLabels: Record<ClipTypeFilter, string> = {
+    all: "",
+    text: t.filterText,
+    image: t.contentType.image,
+    file: t.filterFile,
+  };
+  const activeTypeLabel = typeLabels[data.typeFilter];
+  const filterActive = Boolean(debouncedSearch.trim()) || data.typeFilter !== "all" || data.selectedGroupId !== null;
+  const clearFilters = useCallback(() => {
+    setSearch("");
+    data.setTypeFilter("all");
+    data.setSelectedGroupId(null);
+  }, [data.setSelectedGroupId, data.setTypeFilter]);
+
   return (
       <main className="flex h-screen flex-col overflow-hidden rounded-xl bg-background text-foreground">
         <WindowBar
@@ -181,14 +195,27 @@ export default function App() {
               <>
                 {/* Search + Groups */}
                 <div className="flex-shrink-0 border-b border-border/50 bg-muted">
-                  <div className="px-3 py-1.5">
-                    <Input
-                        ref={searchInputRef}
-                        placeholder={t.searchPlaceholder}
-                        value={search}
-                        onChange={(e) => setSearch(e.target.value)}
-                        className="h-7 rounded-lg border border-border/60 bg-card dark:bg-card text-xs placeholder:text-muted-foreground/50 focus-visible:border-primary/30"
-                    />
+                  {/* The count belongs to the current query, so it rides on the search row instead
+                      of costing a row of its own in a 400x500 window. */}
+                  <div className="flex items-center gap-2 px-3 py-1.5">
+                    <div className="flex h-7 min-w-0 flex-1 items-center gap-1 rounded-lg border border-border/60 bg-card px-1.5 transition-colors focus-within:border-primary/30">
+                      <ClipTypeToken
+                          value={data.typeFilter}
+                          label={activeTypeLabel}
+                          onChange={data.setTypeFilter}
+                          onClosed={() => searchInputRef.current?.focus()}
+                      />
+                      <input
+                          ref={searchInputRef}
+                          value={search}
+                          onChange={(e) => setSearch(e.target.value)}
+                          placeholder={activeTypeLabel ? t.searchInType(activeTypeLabel) : t.searchPlaceholder}
+                          className="h-full min-w-0 flex-1 bg-transparent text-xs text-foreground outline-none placeholder:text-muted-foreground/50"
+                      />
+                    </div>
+                    <span className="shrink-0 text-[10px] tabular-nums text-muted-foreground/50">
+                      {t.recordsCount(data.state.clips.total)}
+                    </span>
                   </div>
 
                   <GroupBar
@@ -199,13 +226,6 @@ export default function App() {
                       onRename={(id, name) => void data.renameGroup(id, name)}
                       onDelete={removeGroup}
                   />
-
-                  {/* Record count */}
-                  <div className="flex-shrink-0 px-3 pb-1.5">
-              <span className="text-[10px] text-muted-foreground/50">
-                {t.recordsCount(data.state.clips.total)}
-              </span>
-                  </div>
                 </div>
 
                 {/* Clip list */}
@@ -220,6 +240,8 @@ export default function App() {
                     onMoveGroup={data.handleMoveGroup}
                     onDelete={handleDeleteClip}
                     onLoadMore={data.loadMoreClips}
+                    filtered={filterActive}
+                    onClearFilters={clearFilters}
                 />
               </>
           ) : null}

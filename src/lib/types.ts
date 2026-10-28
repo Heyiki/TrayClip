@@ -1,5 +1,8 @@
 export type ClipContentType = "plain_text" | "rich_text" | "image" | "file_paths";
 
+/** The type filter offered by the list header. "text" covers both stored text types. */
+export type ClipTypeFilter = "all" | "text" | "image" | "file";
+
 /**
  * One row of the history list. `preview` is the only text the backend sends: a page of
  * large clips would otherwise serialize megabytes over IPC on every refresh. Full text is
@@ -63,6 +66,7 @@ export interface ListClipsRequest {
   keyword?: string;
   group_id?: number | null;
   pinned_only?: boolean;
+  content_types?: ClipContentType[];
 }
 
 export interface ListClipsResponse {

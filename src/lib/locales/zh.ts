@@ -21,10 +21,19 @@ export const zh = {
 
   // 剪贴记录
   searchPlaceholder: "搜索",
+  searchInType: (type: string) => `在${type}中搜索…`,
+  filterType: "筛选类型",
+  filterText: "文本",
+  filterFile: "文件",
+  clearTypeFilter: "清除类型筛选",
+  clearFilters: "清除筛选",
   groupNamePlaceholder: "分组名",
   createGroup: "新建分组",
   recordsCount: (n: number) => `${n} 条记录`,
-  renameGroupHint: (name: string) => `双击重命名，右键删除「${name}」`,
+  rename: "重命名",
+  deleteGroup: "删除分组",
+  groupsLabel: "分组",
+  groupHint: (name: string) => `单击切换，右键管理「${name}」`,
 
   // 内容类型
   contentType: {
@@ -37,6 +46,7 @@ export const zh = {
   // ClipCard
   moreFiles: (n: number) => `及其他 ${n} 个文件`,
   emptyRecords: "暂无记录",
+  emptyFiltered: "当前筛选下没有记录",
   imagePreview: "图片预览",
   imagePreviewUnavailable: "图片无法预览",
   imagePreviewCount: (current: number, total: number) => `${current} / ${total}`,

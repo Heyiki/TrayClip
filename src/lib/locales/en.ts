@@ -20,10 +20,19 @@ export const en: typeof zh = {
   closeWindow: "Close window",
 
   searchPlaceholder: "Search",
+  searchInType: (type: string) => `Search in ${type.toLowerCase()}…`,
+  filterType: "Filter by type",
+  filterText: "Text",
+  filterFile: "Files",
+  clearTypeFilter: "Clear type filter",
+  clearFilters: "Clear filters",
   groupNamePlaceholder: "Group name",
   createGroup: "New group",
   recordsCount: (n: number) => `${n} records`,
-  renameGroupHint: (name: string) => `Double-click to rename, right-click to delete "${name}"`,
+  rename: "Rename",
+  deleteGroup: "Delete group",
+  groupsLabel: "Groups",
+  groupHint: (name: string) => `Click to switch, right-click for options "${name}"`,
 
   contentType: {
     plain_text: "Plain text",
@@ -34,6 +43,7 @@ export const en: typeof zh = {
 
   moreFiles: (n: number) => `and ${n} more files`,
   emptyRecords: "No records",
+  emptyFiltered: "No records match the current filter",
   imagePreview: "Image preview",
   imagePreviewUnavailable: "Image unavailable",
   imagePreviewCount: (current: number, total: number) => `${current} / ${total}`,

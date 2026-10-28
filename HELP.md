@@ -20,9 +20,9 @@ TrayClip is a local clipboard manager built around history, grouping, pinning, q
 
 ## Group Management
 - New group: click the `+` button on the group bar, enter a name, and press `Enter`.
-- Rename group: double-click a group tag, enter a new name, and press `Enter` to confirm or `Esc` to cancel.
-- Delete group: right-click a group tag and confirm deletion. Records move back to ungrouped.
-- Filter by group: click a group tag to filter records, or click `All` to show everything.
+- Rename group: right-click a group tag, choose Rename, enter a new name, then press `Enter` to confirm or `Esc` to cancel.
+- Delete group: right-click a group tag, choose Delete group, and confirm. Records move back to ungrouped.
+- Filter by group: click a group tag to filter records, or click `All` to show everything; `←` / `→` also switch groups.
 - Move to group: use the group action in a record to choose a target group.
 
 ## Keyboard Shortcuts

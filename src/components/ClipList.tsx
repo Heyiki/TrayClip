@@ -3,6 +3,7 @@ import { useVirtualizer } from "@tanstack/react-virtual";
 import type { AppSettings, ClipGroup, ClipListItem } from "@/lib/types";
 import { useTranslation } from "@/lib/i18n";
 import { ClipCard } from "@/components/ClipCard";
+import { Button } from "@/components/ui/button";
 
 interface ClipListProps {
     clips: ClipListItem[];
@@ -15,6 +16,9 @@ interface ClipListProps {
     onDelete: (clipId: number) => void;
     onLoadMore?: () => Promise<void>;
     scrollResetKey: number;
+    /** Whether a keyword, a group or a type narrows the list; drives the empty state copy. */
+    filtered?: boolean;
+    onClearFilters?: () => void;
 }
 
 export function ClipList({
@@ -28,6 +32,8 @@ export function ClipList({
                              onDelete,
                              onLoadMore,
                              scrollResetKey,
+                             filtered = false,
+                             onClearFilters,
                          }: ClipListProps) {
     const { t } = useTranslation();
     const [selectedIndex, setSelectedIndex] = useState(-1);
@@ -71,12 +77,20 @@ export function ClipList({
     useEffect(() => {
         const handleKeydown = (e: KeyboardEvent) => {
             if (clips.length === 0) return;
+            const target = e.target instanceof HTMLElement ? e.target : null;
+            // The type filter popup and the group strip own Enter and the arrow keys while they
+            // have focus; without this the list would recopy a clip or move its selection
+            // underneath them.
+            if (target?.closest(
+                "[data-slot='select-content'], [data-slot='select-trigger'], [data-slot='dropdown-menu-content'], "
+                + "[data-slot='dropdown-menu-trigger'], [data-slot='context-menu-content'], [data-slot='group-bar']",
+            )) return;
             if (e.key === "Enter" && selectedIndexRef.current >= 0 && clips[selectedIndexRef.current]) {
                 e.preventDefault();
                 onRecopy(clips[selectedIndexRef.current].id);
                 return;
             }
-            const target = e.target as HTMLElement;
+            if (!target) return;
             if (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable) return;
             if (e.key === "ArrowDown") {
                 e.preventDefault();
@@ -119,8 +133,18 @@ export function ClipList({
 
     if (clips.length === 0) {
         return (
-            <div className="flex w-full flex-1 flex-col items-center justify-center gap-1 p-8">
-                <p className="text-xs text-muted-foreground/40">{t.emptyRecords}</p>
+            <div className="flex w-full flex-1 flex-col items-center justify-center gap-2 p-8">
+                <p className="text-xs text-muted-foreground/40">{filtered ? t.emptyFiltered : t.emptyRecords}</p>
+                {filtered && onClearFilters ? (
+                    <Button
+                        variant="ghost"
+                        size="sm"
+                        className="h-6 text-[11px] text-primary hover:bg-primary/10"
+                        onClick={onClearFilters}
+                    >
+                        {t.clearFilters}
+                    </Button>
+                ) : null}
             </div>
         );
     }

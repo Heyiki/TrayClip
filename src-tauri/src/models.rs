@@ -117,6 +117,10 @@ pub struct ListClipsRequest {
     pub keyword: Option<String>,
     pub group_id: Option<i64>,
     pub pinned_only: Option<bool>,
+    /// Stored `content_type` values to keep; empty or missing means every type. A single
+    /// value cannot express "text", which is two stored types, hence the list.
+    #[serde(default)]
+    pub content_types: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

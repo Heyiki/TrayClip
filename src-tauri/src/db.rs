@@ -2,7 +2,7 @@ use std::time::Duration;
 use anyhow::Context;
 use chrono::Utc;
 use r2d2::Pool;
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{params, Connection, OptionalExtension, ToSql};
 use sha2::{Digest, Sha256};
 
 use crate::app_state::{DbPool, SqliteConnectionManager};
@@ -493,6 +493,27 @@ fn clip_list_columns() -> String {
     )
 }
 
+/// The filter shared by the count and the page query. `type_count` is how many
+/// `content_type` values follow the three fixed filters, so both statements are assembled
+/// from one definition and can never disagree about which rows they describe.
+fn clip_filter_sql(type_count: usize) -> String {
+    let mut sql = String::from(
+        "WHERE (?1 = '' OR instr(LOWER(COALESCE(plain_text, '') || ' ' || summary || ' ' || COALESCE(source_app, '') || ' ' || COALESCE(file_paths_json, '')), ?1) > 0) AND (?2 IS NULL OR group_id = ?2) AND (?3 = 0 OR is_pinned = 1)",
+    );
+    if type_count > 0 {
+        let placeholders = (0..type_count)
+            .map(|index| format!("?{}", index + 4))
+            .collect::<Vec<_>>()
+            .join(", ");
+        sql.push_str(&format!(" AND content_type IN ({})", placeholders));
+    }
+    sql
+}
+
+/// The stored `content_type` literals, in `content_type_key` spelling. Values outside this
+/// list are dropped from a request instead of matched.
+const KNOWN_CONTENT_TYPES: [&str; 4] = ["plain_text", "rich_text", "image", "file_paths"];
+
 pub fn list_clips(conn: &Connection, request: &ListClipsRequest) -> anyhow::Result<ListClipsResponse> {
     let page = request.page.max(1);
     let page_size = request.page_size.clamp(1, 100);
@@ -501,25 +522,41 @@ pub fn list_clips(conn: &Connection, request: &ListClipsRequest) -> anyhow::Resu
     let group_id = request.group_id;
     let pinned_only = request.pinned_only.unwrap_or(false) as i64;
 
-    const FILTER: &str = "WHERE (?1 = '' OR instr(LOWER(COALESCE(plain_text, '') || ' ' || summary || ' ' || COALESCE(source_app, '') || ' ' || COALESCE(file_paths_json, '')), ?1) > 0) AND (?2 IS NULL OR group_id = ?2) AND (?3 = 0 OR is_pinned = 1)";
+    // Unknown values are dropped rather than matched: a stale or misspelled type would
+    // otherwise read as "nothing matches" instead of "no type filter".
+    let content_types: Vec<&str> = request
+        .content_types
+        .as_deref()
+        .unwrap_or_default()
+        .iter()
+        .map(String::as_str)
+        .filter(|raw| KNOWN_CONTENT_TYPES.contains(raw))
+        .collect();
+
+    let filter = clip_filter_sql(content_types.len());
+    let mut values: Vec<&dyn ToSql> = vec![&keyword, &group_id, &pinned_only];
+    values.extend(content_types.iter().map(|raw| &*raw as &dyn ToSql));
 
     let total: i64 = conn.query_row(
-        &format!("SELECT COUNT(*) FROM clips {}", FILTER),
-        params![keyword, group_id, pinned_only],
+        &format!("SELECT COUNT(*) FROM clips {}", filter),
+        values.as_slice(),
         |row| row.get(0),
     )?;
 
     // Plain text is cut inside SQLite and the link flag comes from the stored text, so the
     // full text only leaves the database through `get_clip_text`, on demand.
+    let limit_index = 4 + content_types.len();
     let mut statement = conn.prepare(&format!(
-        "SELECT {} FROM clips {} ORDER BY is_pinned DESC, position_updated_at DESC, id DESC LIMIT ?4 OFFSET ?5",
+        "SELECT {} FROM clips {} ORDER BY is_pinned DESC, position_updated_at DESC, id DESC LIMIT ?{} OFFSET ?{}",
         clip_list_columns(),
-        FILTER
+        filter,
+        limit_index,
+        limit_index + 1
     ))?;
-    let rows = statement.query_map(
-        params![keyword, group_id, pinned_only, page_size, offset],
-        map_clip_list_item,
-    )?;
+    let mut page_values = values.clone();
+    page_values.push(&page_size);
+    page_values.push(&offset);
+    let rows = statement.query_map(page_values.as_slice(), map_clip_list_item)?;
     let items = rows.collect::<Result<Vec<_>, _>>()?;
 
     Ok(ListClipsResponse {
@@ -810,11 +847,11 @@ mod tests {
         )
         .unwrap();
 
-        let source_match = list_clips(&conn, &ListClipsRequest { page: 1, page_size: 100, keyword: Some("explorer".into()), group_id: None, pinned_only: None }).unwrap();
+        let source_match = list_clips(&conn, &ListClipsRequest { page: 1, page_size: 100, keyword: Some("explorer".into()), group_id: None, pinned_only: None, content_types: None }).unwrap();
         assert_eq!(source_match.total, 1);
         assert_eq!(source_match.items[0].id, 2);
 
-        let path_match = list_clips(&conn, &ListClipsRequest { page: 1, page_size: 100, keyword: Some("report.txt".into()), group_id: None, pinned_only: None }).unwrap();
+        let path_match = list_clips(&conn, &ListClipsRequest { page: 1, page_size: 100, keyword: Some("report.txt".into()), group_id: None, pinned_only: None, content_types: None }).unwrap();
         assert_eq!(path_match.total, 1);
         assert_eq!(path_match.items[0].id, 2);
     }
@@ -853,10 +890,57 @@ mod tests {
         .unwrap();
     }
 
+    fn insert_typed_clip(conn: &Connection, id: i64, content_type: &str, position_updated_at: &str) {
+        conn.execute(
+            "INSERT INTO clips(id, content_type, plain_text, rich_text, summary, image_path, file_paths_json, source_app, is_pinned, is_truncated, group_id, created_at, updated_at, last_used_at, content_hash, position_updated_at)
+             VALUES(?1, ?2, NULL, NULL, ?3, NULL, '[]', '—', 0, 0, NULL, ?4, ?4, NULL, ?5, ?4)",
+            params![id, content_type, format!("clip-{id}"), position_updated_at, format!("hash-{id}")],
+        )
+        .unwrap();
+    }
+
+    fn typed_request(types: Option<&[&str]>) -> ListClipsRequest {
+        ListClipsRequest {
+            page: 1,
+            page_size: 100,
+            keyword: None,
+            group_id: None,
+            pinned_only: None,
+            content_types: types.map(|list| list.iter().map(|raw| raw.to_string()).collect()),
+        }
+    }
+
+    #[test]
+    fn list_clips_filters_by_content_type_and_keeps_total_in_sync_with_items() {
+        let conn = setup_app_conn();
+        insert_typed_clip(&conn, 1, "plain_text", "2024-01-01T00:00:00Z");
+        insert_typed_clip(&conn, 2, "rich_text", "2024-01-01T00:00:01Z");
+        insert_typed_clip(&conn, 3, "image", "2024-01-01T00:00:02Z");
+        insert_typed_clip(&conn, 4, "file_paths", "2024-01-01T00:00:03Z");
+
+        let images = list_clips(&conn, &typed_request(Some(&["image"]))).unwrap();
+        assert_eq!(images.total, 1);
+        assert_eq!(images.items.len(), 1);
+        assert_eq!(images.items[0].content_type, ClipContentType::Image);
+        assert!(!images.has_more);
+
+        // "Text" is two stored types, which is why the request carries a list.
+        let text = list_clips(&conn, &typed_request(Some(&["plain_text", "rich_text"]))).unwrap();
+        assert_eq!(text.total, 2);
+        assert_eq!(text.items.len(), 2);
+
+        // An unknown type must read as "no type filter" rather than "nothing matches".
+        let unknown = list_clips(&conn, &typed_request(Some(&["video"]))).unwrap();
+        assert_eq!(unknown.total, 4);
+
+        let all = list_clips(&conn, &typed_request(None)).unwrap();
+        assert_eq!(all.total, 4);
+    }
+
     fn page_of_one(conn: &Connection) -> crate::models::ClipListItem {
         let page = list_clips(
             conn,
-            &ListClipsRequest { page: 1, page_size: 100, keyword: None, group_id: None, pinned_only: None },
+            &ListClipsRequest { page: 1, page_size: 100, keyword: None, group_id: None, pinned_only: None, content_types: None },
         )
         .unwrap();
         page.items.into_iter().next().unwrap()

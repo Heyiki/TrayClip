@@ -17,18 +17,24 @@ import {
     saveGroup,
     updateSettings,
 } from "@/lib/api";
-import { FALLBACK_BOOTSTRAP } from "@/lib/constants";
-import type { AppSettings, BootstrapPayload, ListClipsRequest } from "@/lib/types";
+import { CLIP_TYPE_FILTER_VALUES, FALLBACK_BOOTSTRAP } from "@/lib/constants";
+import type { AppSettings, BootstrapPayload, ClipContentType, ClipTypeFilter, ListClipsRequest } from "@/lib/types";
 
 const CLIPS_PAGE_SIZE = 50;
 
 // One place that assembles a page request, so fetching another page can never drop the
-// keyword or the group the current list is already filtered by.
-const clipsQuery = (page: number, groupId: number | null, keyword: string): ListClipsRequest => ({
+// keyword, the group or the type filter the current list is already limited by.
+const clipsQuery = (
+    page: number,
+    groupId: number | null,
+    keyword: string,
+    contentTypes: ClipContentType[] | undefined,
+): ListClipsRequest => ({
     page,
     page_size: CLIPS_PAGE_SIZE,
     keyword: keyword || undefined,
     group_id: groupId ?? undefined,
+    content_types: contentTypes,
 });
 
 export function useAppData() {
@@ -40,6 +46,10 @@ export function useAppData() {
         return Number.isNaN(n) ? null : n;
     });
     const [loaded, setLoaded] = useState(false);
+    const [typeFilter, setTypeFilterState] = useState<ClipTypeFilter>(() => {
+        const saved = localStorage.getItem("trayclip-filter-type");
+        return saved === "text" || saved === "image" || saved === "file" ? saved : "all";
+    });
     const [scrollResetKey, setScrollResetKey] = useState(0);
     const initialLoadDone = useRef(false);
     const settingsRef = useRef(state.settings);
@@ -50,6 +60,7 @@ export function useAppData() {
     const clipsLoadingRef = useRef(false);
     const clipsRequestIdRef = useRef(0);
     const clipsKeywordRef = useRef("");
+    const clipsTypeRef = useRef<ClipTypeFilter>(typeFilter);
 
     // Keep refs in sync
     useEffect(() => { settingsRef.current = state.settings; }, [state.settings]);
@@ -57,6 +68,14 @@ export function useAppData() {
         selectedGroupIdRef.current = selectedGroupId;
         localStorage.setItem("trayclip-selected-group", String(selectedGroupId));
     }, [selectedGroupId]);
+
+    // Written synchronously rather than in an effect: the reload started by the same click
+    // runs before effects do, and would otherwise read the previous filter.
+    const setTypeFilter = useCallback((next: ClipTypeFilter) => {
+        clipsTypeRef.current = next;
+        localStorage.setItem("trayclip-filter-type", next);
+        setTypeFilterState(next);
+    }, []);
 
     // --- Data loading ---
     const loadConfig = useCallback(async () => {
@@ -80,7 +99,7 @@ export function useAppData() {
             const gid = groupId === undefined ? selectedGroupIdRef.current : groupId;
             const query = keyword === undefined ? clipsKeywordRef.current : keyword.trim();
             clipsKeywordRef.current = query;
-            const clips = await listClips(clipsQuery(1, gid, query));
+            const clips = await listClips(clipsQuery(1, gid, query, CLIP_TYPE_FILTER_VALUES[clipsTypeRef.current]));
             if (requestId !== clipsRequestIdRef.current) return;
             clipsPageRef.current = 1;
             clipsHasMoreRef.current = clips.has_more;
@@ -98,7 +117,7 @@ export function useAppData() {
         const query = clipsKeywordRef.current;
         clipsLoadingRef.current = true;
         try {
-            const nextClips = await listClips(clipsQuery(nextPage, selectedGroupIdRef.current, query));
+            const nextClips = await listClips(clipsQuery(nextPage, selectedGroupIdRef.current, query, CLIP_TYPE_FILTER_VALUES[clipsTypeRef.current]));
             if (requestId !== clipsRequestIdRef.current) return;
             clipsPageRef.current = nextPage;
             clipsHasMoreRef.current = nextClips.has_more;
@@ -124,7 +143,7 @@ export function useAppData() {
         try {
             const responses = await Promise.all(
                 Array.from({ length: loadedPage }, (_, index) =>
-                    listClips(clipsQuery(index + 1, selectedGroupIdRef.current, query)),
+                    listClips(clipsQuery(index + 1, selectedGroupIdRef.current, query, CLIP_TYPE_FILTER_VALUES[clipsTypeRef.current])),
                 ),
             );
             if (requestId !== clipsRequestIdRef.current) return;
@@ -153,7 +172,7 @@ export function useAppData() {
                 const [cfg, groups, clips] = await Promise.all([
                     getConfig(),
                     listGroups(),
-                    listClips(clipsQuery(1, selectedGroupIdRef.current, clipsKeywordRef.current)),
+                    listClips(clipsQuery(1, selectedGroupIdRef.current, clipsKeywordRef.current, CLIP_TYPE_FILTER_VALUES[clipsTypeRef.current])),
                 ]);
                 if (requestId !== clipsRequestIdRef.current) return;
                 clipsPageRef.current = 1;
@@ -288,6 +307,8 @@ export function useAppData() {
         state,
         selectedGroupId,
         setSelectedGroupId,
+        typeFilter,
+        setTypeFilter,
         loaded,
         scrollResetKey,
         initialLoadDone,
