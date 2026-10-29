@@ -274,7 +274,7 @@ export function SettingsPanel({
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="zh-CN" className="text-xs">中文</SelectItem>
+                <SelectItem value="zh-CN" className="text-xs">简体中文</SelectItem>
                 <SelectItem value="en" className="text-xs">English</SelectItem>
               </SelectContent>
             </Select>

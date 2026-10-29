@@ -22,8 +22,12 @@ import {
 } from "@/components/ui/select";
 import { ScrollArea } from "@/components/ui/scroll-area";
 
+/// `code` is what the Edge endpoint expects, `llmCode` is the key `translateText` reads from
+/// LANG_NAMES — a language missing there reaches the model as a bare code. The original eight
+/// keep their positions so the list does not reshuffle for users who know it by order.
 const LANGUAGES = [
-  { code: "zh-Hans", label: "中文", llmCode: "zh" },
+  { code: "zh-Hans", label: "简体中文", llmCode: "zh" },
+  { code: "zh-Hant", label: "繁體中文", llmCode: "zh-Hant" },
   { code: "en", label: "English", llmCode: "en" },
   { code: "ja", label: "日本語", llmCode: "ja" },
   { code: "ko", label: "한국어", llmCode: "ko" },
@@ -31,6 +35,10 @@ const LANGUAGES = [
   { code: "es", label: "Español", llmCode: "es" },
   { code: "de", label: "Deutsch", llmCode: "de" },
   { code: "ru", label: "Русский", llmCode: "ru" },
+  { code: "pt", label: "Português", llmCode: "pt" },
+  { code: "it", label: "Italiano", llmCode: "it" },
+  { code: "vi", label: "Tiếng Việt", llmCode: "vi" },
+  { code: "th", label: "ไทย", llmCode: "th" },
 ];
 
 interface TranslateDialogProps {
@@ -71,6 +79,9 @@ export function TranslateDialog({
       } else {
         translated = await bingTranslate(payload, "", targetLang);
       }
+      // Edge answers an unsupported target language with an empty string rather than an error,
+      // and an empty result renders as nothing at all — report it instead of a silent no-op.
+      if (!translated.trim()) throw new Error("empty translation");
       setResult(translated);
     } catch (error) {
       setError(isLLMTimeoutError(error) ? t.aiTimeout : t.translateFailed);
