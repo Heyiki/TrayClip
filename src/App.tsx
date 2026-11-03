@@ -233,6 +233,7 @@ export default function App() {
                     clips={data.state.clips.items}
                     scrollResetKey={data.scrollResetKey + searchResetKey}
                     groups={data.state.groups}
+                    showGroupName={data.selectedGroupId === null}
                     settings={data.state.settings}
                     scrollRef={scrollRef}
                     onRecopy={data.handleRecopy}

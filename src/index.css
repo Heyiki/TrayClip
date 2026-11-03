@@ -207,3 +207,28 @@
         display: none;
     }
 }
+
+.clip-actions {
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 120ms ease-out;
+}
+
+.clip-card:is(:hover, :has(:focus-visible), [data-selected]) .clip-actions {
+    opacity: 1;
+    pointer-events: auto;
+}
+
+.clip-card:is(:hover, :has(:focus-visible), [data-selected]) .clip-meta {
+    visibility: hidden;
+}
+
+@media (hover: none) {
+    .clip-actions {
+        opacity: 1;
+        pointer-events: auto;
+    }
+    .clip-meta {
+        visibility: hidden;
+    }
+}

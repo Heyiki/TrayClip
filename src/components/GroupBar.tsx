@@ -94,9 +94,12 @@ export function GroupBar({
   const [renamingId, setRenamingId] = useState<number | null>(null);
   const [renameValue, setRenameValue] = useState("");
   const [overflow, setOverflow] = useState({ start: false, end: false });
+  const [isDragging, setIsDragging] = useState(false);
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const allButtonRef = useRef<HTMLButtonElement>(null);
+  const dragRef = useRef<{ pointerId: number; x: number; scrollLeft: number; moved: boolean } | null>(null);
+  const suppressClickRef = useRef(false);
 
   const handleCreate = useCallback(() => {
     const name = newName.trim();
@@ -135,7 +138,42 @@ export function GroupBar({
     const observer = new ResizeObserver(syncOverflow);
     observer.observe(container);
     return () => observer.disconnect();
-  }, [groups, syncOverflow]);
+  }, [groups, renamingId, syncOverflow]);
+
+  const handlePointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
+    suppressClickRef.current = false;
+    if (event.pointerType !== "mouse" || event.button !== 0) return;
+    if (event.target instanceof HTMLInputElement) return;
+    const container = event.currentTarget;
+    if (container.scrollWidth <= container.clientWidth) return;
+    dragRef.current = {
+      pointerId: event.pointerId,
+      x: event.clientX,
+      scrollLeft: container.scrollLeft,
+      moved: false,
+    };
+  };
+
+  const handlePointerMove = (event: React.PointerEvent<HTMLDivElement>) => {
+    const drag = dragRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    const distance = event.clientX - drag.x;
+    if (!drag.moved) {
+      if (Math.abs(distance) < 5) return;
+      drag.moved = true;
+      suppressClickRef.current = true;
+      // Capture only after dragging starts, preserving the chip's normal click target.
+      event.currentTarget.setPointerCapture(event.pointerId);
+      setIsDragging(true);
+    }
+    event.preventDefault();
+    event.currentTarget.scrollLeft = drag.scrollLeft - distance;
+  };
+
+  const finishDrag = () => {
+    dragRef.current = null;
+    setIsDragging(false);
+  };
 
   // Right-clicking the last visible chip opens an editor that may stick out of the strip.
   useEffect(() => {
@@ -198,8 +236,24 @@ export function GroupBar({
           <div className="relative min-w-0 flex-1">
             <div
                 ref={scrollRef}
-                className="relative flex items-center gap-1.5 overflow-x-auto scrollbar-none"
+                className={cn(
+                    "relative flex select-none items-center gap-1.5 overflow-x-auto scrollbar-none",
+                    isDragging ? "cursor-grabbing [&_button]:cursor-grabbing" : "cursor-grab [&_button]:cursor-grab",
+                )}
                 onScroll={syncOverflow}
+                onPointerDown={handlePointerDown}
+                onPointerMove={handlePointerMove}
+                onPointerUp={finishDrag}
+                onPointerCancel={finishDrag}
+                onLostPointerCapture={finishDrag}
+                onPointerLeave={() => {
+                  if (!dragRef.current?.moved) finishDrag();
+                }}
+                onClickCapture={(event) => {
+                  if (!suppressClickRef.current || event.detail === 0) return;
+                  event.preventDefault();
+                  event.stopPropagation();
+                }}
             >
               {groups.map((group) =>
                   renamingId === group.id ? (
@@ -248,12 +302,11 @@ export function GroupBar({
                   )
               )}
             </div>
-            {/* Edge fades are the only hint that the strip scrolls: the scrollbar is hidden. */}
             {overflow.start ? (
-                <span className="pointer-events-none absolute inset-y-0 left-0 w-5 bg-gradient-to-r from-muted to-transparent" />
+                <span aria-hidden="true" className="pointer-events-none absolute inset-y-0 left-0 w-5 bg-gradient-to-r from-muted to-transparent" />
             ) : null}
             {overflow.end ? (
-                <span className="pointer-events-none absolute inset-y-0 right-0 w-5 bg-gradient-to-l from-muted to-transparent" />
+                <span aria-hidden="true" className="pointer-events-none absolute inset-y-0 right-0 w-5 bg-gradient-to-l from-muted to-transparent" />
             ) : null}
           </div>
         </div>

@@ -585,7 +585,9 @@ pub fn compute_hash(content_type: &ClipContentType, plain_text: &Option<String>,
     hasher.update(serde_json::to_string(content_type).unwrap_or_default());
     hasher.update(plain_text.clone().unwrap_or_default());
     hasher.update(rich_text.clone().unwrap_or_default());
-    hasher.update(summary);
+    if *content_type != ClipContentType::FilePaths {
+        hasher.update(summary);
+    }
     hasher.update(file_paths.join("\n"));
     format!("{:x}", hasher.finalize())
 }
@@ -602,18 +604,26 @@ fn content_type_key(content_type: &ClipContentType) -> &'static str {
 pub fn ingest_clip(conn: &Connection, settings: &AppSettings, payload: NewClipRecord) -> anyhow::Result<Vec<String>> {
     let now = Utc::now().to_rfc3339();
     let content_type = content_type_key(&payload.content_type);
+    let file_paths_json = serde_json::to_string(&payload.file_paths)?;
     let existing_clip_id: Option<i64> = conn
         .query_row(
-            "SELECT id FROM clips WHERE content_type = ?1 AND content_hash = ?2 ORDER BY position_updated_at DESC, id DESC LIMIT 1",
-            params![content_type, payload.content_hash],
+            // Older path records hashed their display summary; match the actual paths too.
+            "SELECT id FROM clips WHERE content_type = ?1 AND (content_hash = ?2 OR (?1 = 'file_paths' AND file_paths_json = ?3)) ORDER BY position_updated_at DESC, id DESC LIMIT 1",
+            params![content_type, payload.content_hash, file_paths_json],
             |row| row.get(0),
         )
         .optional()?;
 
     if let Some(clip_id) = existing_clip_id {
+        let source = payload.source_app.trim();
+        let source_app = if source.is_empty() || source == "—" || source.eq_ignore_ascii_case("trayclip") {
+            None
+        } else {
+            Some(source)
+        };
         conn.execute(
-            "UPDATE clips SET plain_text = ?1, rich_text = ?2, summary = ?3, image_path = ?4, file_paths_json = ?5, source_app = ?6, is_truncated = ?7, updated_at = ?8, position_updated_at = ?8 WHERE id = ?9",
-            params![payload.plain_text, payload.rich_text, payload.summary, payload.image_path, serde_json::to_string(&payload.file_paths)?, payload.source_app, payload.is_truncated as i64, now, clip_id],
+            "UPDATE clips SET plain_text = ?1, rich_text = ?2, summary = ?3, image_path = ?4, file_paths_json = ?5, source_app = COALESCE(?6, source_app), is_truncated = ?7, updated_at = ?8, position_updated_at = ?8, content_hash = ?10 WHERE id = ?9",
+            params![payload.plain_text, payload.rich_text, payload.summary, payload.image_path, file_paths_json, source_app, payload.is_truncated as i64, now, clip_id, payload.content_hash],
         )?;
         conn.execute(
             "DELETE FROM clips WHERE content_type = ?1 AND content_hash = ?2 AND id != ?3",
@@ -944,6 +954,76 @@ mod tests {
         )
         .unwrap();
         page.items.into_iter().next().unwrap()
+    }
+
+    #[test]
+    fn ingest_preserves_source_when_recopied_without_an_external_owner() {
+        let conn = setup_app_conn();
+        let settings = load_settings(&conn).unwrap();
+        let mut payload = NewClipRecord {
+            content_type: ClipContentType::PlainText,
+            plain_text: Some("source test".into()),
+            rich_text: None,
+            summary: "source test".into(),
+            image_path: None,
+            file_paths: Vec::new(),
+            source_app: "WXWork".into(),
+            is_truncated: false,
+            content_hash: "source-test-hash".into(),
+        };
+        ingest_clip(&conn, &settings, payload.clone()).unwrap();
+        for owner in ["—", "", "  ", "trayclip", "TrayClip"] {
+            payload.source_app = owner.into();
+            ingest_clip(&conn, &settings, payload.clone()).unwrap();
+            assert_eq!(page_of_one(&conn).source_app, "WXWork", "owner: {owner}");
+        }
+        payload.source_app = "Notepad".into();
+        ingest_clip(&conn, &settings, payload).unwrap();
+        assert_eq!(page_of_one(&conn).source_app, "Notepad");
+    }
+
+    #[test]
+    fn file_paths_hash_ignores_summary_but_keeps_path_identity() {
+        let paths = vec![r"C:\Documents\report.pdf".to_string()];
+        let hash = compute_hash(&ClipContentType::FilePaths, &None, &None, &paths, &paths[0]);
+        assert_eq!(hash, compute_hash(&ClipContentType::FilePaths, &None, &None, &paths, "文件 report.pdf"));
+        let other_paths = vec![r"C:\Documents\other.pdf".to_string()];
+        assert_ne!(hash, compute_hash(&ClipContentType::FilePaths, &None, &None, &other_paths, "文件 report.pdf"));
+        assert_ne!(
+            compute_hash(&ClipContentType::PlainText, &Some("text".into()), &None, &[], "one"),
+            compute_hash(&ClipContentType::PlainText, &Some("text".into()), &None, &[], "two"),
+        );
+    }
+
+    #[test]
+    fn file_paths_recopy_reuses_existing_record_despite_summary_changes() {
+        let conn = setup_app_conn();
+        let settings = load_settings(&conn).unwrap();
+        let paths = vec![r"C:\Documents\report.pdf".to_string()];
+        let mut payload = NewClipRecord {
+            content_type: ClipContentType::FilePaths,
+            plain_text: None,
+            rich_text: None,
+            summary: paths[0].clone(),
+            image_path: None,
+            file_paths: paths,
+            source_app: "Editor".into(),
+            is_truncated: false,
+            content_hash: "legacy-summary-dependent-hash".into(),
+        };
+        ingest_clip(&conn, &settings, payload.clone()).unwrap();
+        let original = page_of_one(&conn);
+        pin_toggle(&conn, original.id, true).unwrap();
+        payload.summary = "文件 report.pdf".into();
+        payload.content_hash = compute_hash(
+            &payload.content_type, &None, &None, &payload.file_paths, &payload.summary,
+        );
+        ingest_clip(&conn, &settings, payload).unwrap();
+        let count: i64 = conn.query_row("SELECT COUNT(*) FROM clips", [], |row| row.get(0)).unwrap();
+        assert_eq!(count, 1);
+        let recopied = page_of_one(&conn);
+        assert_eq!(recopied.id, original.id);
+        assert!(recopied.is_pinned);
     }
 
     #[test]

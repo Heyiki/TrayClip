@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 interface ClipListProps {
     clips: ClipListItem[];
     groups: ClipGroup[];
+    showGroupName?: boolean;
     settings: AppSettings;
     scrollRef?: React.RefObject<HTMLDivElement | null>;
     onRecopy: (clipId: number) => void;
@@ -24,6 +25,7 @@ interface ClipListProps {
 export function ClipList({
                              clips,
                              groups,
+                             showGroupName = true,
                              settings,
                              scrollRef,
                              onRecopy,
@@ -36,12 +38,31 @@ export function ClipList({
                              onClearFilters,
                          }: ClipListProps) {
     const { t } = useTranslation();
+    const [now, setNow] = useState(Date.now);
     const [selectedIndex, setSelectedIndex] = useState(-1);
     const selectedIndexRef = useRef(selectedIndex);
     const pendingDeltaRef = useRef(0);
     const flushRafRef = useRef(0);
     const internalRef = useRef<HTMLDivElement>(null);
     const scrollElement = scrollRef ?? internalRef;
+
+    useEffect(() => {
+        setNow(Date.now());
+    }, [clips]);
+
+    useEffect(() => {
+        const refresh = () => {
+            if (!document.hidden) setNow(Date.now());
+        };
+        const timer = window.setInterval(refresh, 60_000);
+        window.addEventListener("focus", refresh);
+        document.addEventListener("visibilitychange", refresh);
+        return () => {
+            window.clearInterval(timer);
+            window.removeEventListener("focus", refresh);
+            document.removeEventListener("visibilitychange", refresh);
+        };
+    }, []);
 
     const virtualizer = useVirtualizer({
         count: clips.length,
@@ -85,6 +106,8 @@ export function ClipList({
                 "[data-slot='select-content'], [data-slot='select-trigger'], [data-slot='dropdown-menu-content'], "
                 + "[data-slot='dropdown-menu-trigger'], [data-slot='context-menu-content'], [data-slot='group-bar']",
             )) return;
+            // Focused row controls handle Enter themselves, independent of the arrow selection.
+            if (target?.closest("[data-clip-card]") && e.key === "Enter") return;
             if (e.key === "Enter" && selectedIndexRef.current >= 0 && clips[selectedIndexRef.current]) {
                 e.preventDefault();
                 onRecopy(clips[selectedIndexRef.current].id);
@@ -181,7 +204,9 @@ export function ClipList({
                                 <ClipCard
                                     clip={clips[virtualRow.index]}
                                     selected={virtualRow.index === selectedIndex}
+                                    now={now}
                                     groups={groups}
+                                    showGroupName={showGroupName}
                                     settings={settings}
                                     onRecopy={onRecopy}
                                     onPinToggle={onPinToggle}

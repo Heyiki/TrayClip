@@ -1,5 +1,5 @@
 import { memo, useCallback, useMemo, useState } from "react";
-import { Copy, Expand, Pin, PinOff, Trash2 } from "lucide-react";
+import { Copy, Expand, FileText, Files, Image, Pin, PinOff, Trash2 } from "lucide-react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import type { AppSettings, ClipGroup, ClipListItem } from "@/lib/types";
 import { useTranslation } from "@/lib/i18n";
@@ -19,6 +19,7 @@ import { LLMResultDialog } from "@/components/LLMResultDialog";
 import { TranslateDialog } from "@/components/TranslateDialog";
 import { ImagePreviewDialog } from "@/components/ImagePreviewDialog";
 import { getClipText, recopyImage } from "@/lib/api";
+import { formatClipTime } from "@/lib/clip-time";
 
 const IMAGE_EXTENSIONS = new Set([
   ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp", ".ico", ".tiff", ".tif", ".svg",
@@ -35,13 +36,13 @@ function FileThumb({ path, onClick }: { path: string; onClick: () => void }) {
   return (
       <button
           type="button"
-          className="cursor-zoom-in rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          className="flex h-fit w-fit max-w-20 shrink-0 cursor-zoom-in overflow-hidden rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           onClick={(event) => { event.stopPropagation(); onClick(); }}
           onDoubleClick={(event) => event.stopPropagation()}
           title={path.split(/[/\\]/).pop() ?? "image"}
       >
         <img
-            className="h-9 w-11 rounded-sm object-cover"
+            className="block h-auto max-h-16 w-auto max-w-full rounded object-contain"
             src={thumbSrc ?? undefined}
             alt={path.split(/[/\\]/).pop() ?? "image"}
             onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
@@ -50,43 +51,21 @@ function FileThumb({ path, onClick }: { path: string; onClick: () => void }) {
   );
 }
 
-const TYPE_COLORS: Record<string, string> = {
-  text: "bg-blue-100 text-blue-700 dark:bg-blue-500/15 dark:text-blue-400",
-  rich_text: "bg-violet-100 text-violet-700 dark:bg-violet-500/15 dark:text-violet-400",
-  image: "bg-emerald-100 text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-400",
-  file_paths: "bg-amber-100 text-amber-700 dark:bg-amber-500/15 dark:text-amber-400",
-};
-
-const GROUP_COLORS = [
-  "bg-sky-100 text-sky-700 dark:bg-sky-500/15 dark:text-sky-400",
-  "bg-rose-100 text-rose-700 dark:bg-rose-500/15 dark:text-rose-400",
-  "bg-teal-100 text-teal-700 dark:bg-teal-500/15 dark:text-teal-400",
-  "bg-orange-100 text-orange-700 dark:bg-orange-500/15 dark:text-orange-400",
-  "bg-purple-100 text-purple-700 dark:bg-purple-500/15 dark:text-purple-400",
-  "bg-lime-100 text-lime-700 dark:bg-lime-500/15 dark:text-lime-400",
-  "bg-pink-100 text-pink-700 dark:bg-pink-500/15 dark:text-pink-400",
-  "bg-cyan-100 text-cyan-700 dark:bg-cyan-500/15 dark:text-cyan-400",
-];
-
-function hashName(name: string): number {
-  let h = 0;
-  for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) | 0;
-  return Math.abs(h);
-}
-
 function TypeTag({ type, label }: { type: string; label: string }) {
-  const color = TYPE_COLORS[type] ?? "bg-muted text-muted-foreground";
+  const Icon = type === "image" ? Image : type === "file_paths" ? Files : FileText;
   return (
-      <span className={`inline-flex h-[15px] items-center rounded-[3px] px-1 font-mono text-[9px] font-bold tracking-wider ${color}`}>
-      {label}
-    </span>
+      <span className="inline-flex shrink-0 items-center text-muted-foreground" title={label} aria-label={label}>
+        <Icon className="size-3" aria-hidden="true" />
+      </span>
   );
 }
 
 interface ClipCardProps {
   clip: ClipListItem;
   selected: boolean;
+  now: number;
   groups: ClipGroup[];
+  showGroupName?: boolean;
   settings: AppSettings;
   onRecopy: (clipId: number) => void;
   onPinToggle: (clipId: number, pinned: boolean) => void;
@@ -97,14 +76,16 @@ interface ClipCardProps {
 export const ClipCard = memo(function ClipCard({
                                                  clip,
                                                  selected,
+                                                 now,
                                                  groups,
+                                                 showGroupName = true,
                                                  settings,
                                                  onRecopy,
                                                  onPinToggle,
                                                  onMoveGroup,
                                                  onDelete,
                                                }: ClipCardProps) {
-  const { t } = useTranslation();
+  const { t, locale } = useTranslation();
   const typeLabel = t.contentType[clip.content_type] ?? clip.content_type.slice(0, 4).toUpperCase();
   const isFilePaths = clip.content_type === "file_paths";
   const imagePaths = useMemo(() => isFilePaths ? clip.file_paths.filter(isImagePath) : [], [isFilePaths, clip.file_paths]);
@@ -202,126 +183,136 @@ export const ClipCard = memo(function ClipCard({
     return head.startsWith("{") || head.startsWith("[");
   }, [clip.preview, clip.preview_truncated]);
   const hasText = Boolean(clip.preview.trim());
+  const groupName = groups.find((group) => group.id === clip.group_id)?.name;
+  const time = formatClipTime(clip.created_at, locale, now, clip.last_used_at);
+  const hasImage = (clip.content_type === "image" && Boolean(clip.image_path)) || imagePaths.length > 0;
 
   return (
       <ContextMenu>
         <ContextMenuTrigger asChild>
           <div
-              className={`group relative cursor-default rounded-lg border-l-[3px] border-y-2 border-r-2 bg-card text-card-foreground shadow-xs transition-all duration-200 ${
-                  clip.is_pinned
-                      ? `border-l-primary/60 ${selected ? "border-primary/40 shadow-md" : "border-y-transparent border-r-transparent hover:border-primary/40 hover:shadow-md"}`
-                      : selected
-                          ? "border-primary/40 shadow-md"
-                          : "border-transparent hover:border-primary/40 hover:shadow-md"
+              data-clip-card
+              data-selected={selected ? "" : undefined}
+              className={`clip-card relative cursor-default rounded-[8px] border bg-card text-card-foreground transition-colors duration-150 ${
+                  selected
+                      ? "border-primary/60 bg-primary/[0.06] dark:bg-primary/[0.10]"
+                      : "border-border/60 hover:border-foreground/20 hover:bg-muted"
               }`}
               onDoubleClick={() => onRecopy(clip.id)}
           >
 
-            <div className="px-3 py-2.5">
-              {/* Meta row */}
-              <div className="mb-1.5 flex items-center gap-2">
-                <TypeTag type={clip.content_type} label={typeLabel} />
-                {clip.group_id ? (() => {
-                  const groupName = groups.find((g) => g.id === clip.group_id)?.name;
-                  return groupName ? (
-                      <span className={`inline-flex h-[15px] items-center rounded-[3px] px-1.5 text-[9px] font-bold ${GROUP_COLORS[hashName(groupName) % GROUP_COLORS.length]}`}>
-                    {groupName}
-                  </span>
-                  ) : null;
-                })() : null}
-                {clip.source_app && clip.source_app !== "—" ? (
-                    <span className="max-w-[120px] truncate text-[10px] font-medium text-muted-foreground/70">{clip.source_app}</span>
-                ) : null}
-                {clip.is_truncated ? (
-                    <span className="inline-flex h-[15px] items-center rounded-[3px] bg-amber-100 px-1 text-[9px] font-bold text-amber-700 dark:bg-amber-500/15 dark:text-amber-400">
-                  TRUNC
-                </span>
-                ) : null}
-                <span className="ml-auto shrink-0 font-mono text-[10px] text-muted-foreground/50">
-                {new Date(clip.updated_at).toLocaleString("zh-CN")}
-              </span>
-              </div>
-
+            <div className="px-3 pb-1 pt-2">
               {/* Content */}
-              {clip.content_type === "image" && clip.image_path ? (
-                  <button
-                      type="button"
-                      className="group/image relative my-0.5 block max-w-full cursor-zoom-in rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                      title={t.imagePreview}
-                      onClick={(event) => {
-                        event.stopPropagation();
-                        openPreview(0);
-                      }}
-                      onDoubleClick={(event) => event.stopPropagation()}
-                  >
-                    <img
-                        className="max-h-[56px] max-w-full rounded-sm object-contain"
-                        src={clipImageSrc ?? undefined}
-                        alt={t.imagePreview}
-                    />
-                    <span className="pointer-events-none absolute right-1 top-1 inline-flex h-5 w-5 items-center justify-center rounded bg-black/55 text-white opacity-0 transition-opacity group-hover/image:opacity-100">
+              <div className={isFilePaths ? "flex items-start gap-2" : undefined}>
+                {clip.content_type === "image" && clip.image_path ? (
+                    <button
+                        type="button"
+                        className="group/image relative flex h-fit w-fit max-w-full cursor-zoom-in overflow-hidden rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                        title={t.imagePreview}
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          openPreview(0);
+                        }}
+                        onDoubleClick={(event) => event.stopPropagation()}
+                    >
+                      <img
+                          className="block h-auto max-h-16 w-auto max-w-full rounded-sm object-contain"
+                          src={clipImageSrc ?? undefined}
+                          alt={t.imagePreview}
+                      />
+                      <span className="pointer-events-none absolute right-1 top-1 inline-flex h-5 w-5 items-center justify-center rounded bg-black/55 text-white opacity-0 transition-opacity group-hover/image:opacity-100">
                       <Expand className="h-3 w-3" />
                     </span>
-                  </button>
-              ) : null}
-              {isFilePaths && imagePaths.length > 0 ? (
-                  <div className="my-0.5 flex gap-1.5 overflow-hidden">
-                    {imagePaths.slice(0, 2).map((path, index) => (
-                        <FileThumb key={path} path={path} onClick={() => openPreview(index)} />
-                    ))}
-                  </div>
-              ) : null}
-              {isFilePaths ? (
-                  singleImage ? null : (
-                      <div className="line-clamp-1 break-all text-sm text-foreground/80" title={clip.file_paths.join("\n")}>
-                        {otherPaths.slice(0, 2).map((path) => (
-                            <span key={path} className="truncate">{path} </span>
-                        ))}
-                        {otherPaths.length > 2 ? (
-                            <span className="text-muted-foreground/50">{t.moreFiles(otherPaths.length - 2)}</span>
-                        ) : null}
-                      </div>
-                  )
-              ) : (
-                  <div className="line-clamp-1 break-all text-sm text-foreground/80" title={clip.summary}>
-                    {clip.summary}
-                  </div>
-              )}
+                    </button>
+                ) : null}
+                {isFilePaths && imagePaths.length > 0 ? (
+                    <div className="flex shrink-0 gap-1.5 overflow-hidden">
+                      {imagePaths.slice(0, 2).map((path, index) => (
+                          <FileThumb key={path} path={path} onClick={() => openPreview(index)} />
+                      ))}
+                    </div>
+                ) : null}
+                {isFilePaths ? (
+                    singleImage ? null : (
+                        <div className="min-w-0 flex-1 text-sm leading-5" title={clip.file_paths.join("\n")}>
+                          {otherPaths.slice(0, otherPaths.length > 2 ? 1 : 2).map((path, index) => (
+                              <div key={`${index}-${path}`} className="truncate font-medium">{path.split(/[/\\]/).pop() || path}</div>
+                          ))}
+                          {otherPaths.length > 2 ? (
+                              <div className="truncate text-[11px] text-muted-foreground">{t.moreFiles(otherPaths.length - 1)}</div>
+                          ) : otherPaths.length === 1 ? (
+                              <div className="truncate text-[11px] text-muted-foreground">{otherPaths[0]}</div>
+                          ) : null}
+                        </div>
+                    )
+                ) : (
+                    <div className={`${hasImage ? "line-clamp-1 text-[11px] leading-4 text-muted-foreground" : "line-clamp-2 text-sm leading-5"} whitespace-pre-wrap break-words [overflow-wrap:anywhere]`} title={clip.summary}>
+                      {clip.summary}
+                    </div>
+                )}
+              </div>
 
-              {/* Actions — show on hover */}
-              <div className="mt-1.5 flex items-center gap-2 opacity-0 transition-all duration-150 group-hover:opacity-100">
-                <GroupSelect
-                    groups={groups}
-                    currentGroupId={clip.group_id}
-                    onSelect={(groupId) => onMoveGroup(clip.id, groupId)}
-                />
-                <Button
-                    variant="ghost"
-                    size="icon"
-                    className="h-6 w-6 rounded text-muted-foreground/60 hover:bg-background hover:text-foreground hover:shadow-sm"
-                    title={t.copy}
-                    onClick={() => onRecopy(clip.id)}
-                >
-                  <Copy className="h-3 w-3" />
-                </Button>
-                <Button
-                    variant="ghost"
-                    size="icon"
-                    className="h-6 w-6 rounded text-muted-foreground/60 hover:bg-background hover:text-foreground hover:shadow-sm"
-                    title={clip.is_pinned ? t.unpin : t.pin}
-                    onClick={() => onPinToggle(clip.id, !clip.is_pinned)}
-                >
-                  {clip.is_pinned ? <PinOff className="h-3 w-3" /> : <Pin className="h-3 w-3" />}
-                </Button>
-                <Button
-                    variant="ghost"
-                    size="icon"
-                    className="h-6 w-6 rounded text-muted-foreground/60 hover:bg-background hover:text-destructive hover:shadow-sm"
-                    title={t.delete}
-                    onClick={() => onDelete(clip.id)}
-                >
-                  <Trash2 className="h-3 w-3" />
-                </Button>
+              <div className="mt-1 flex min-w-0 items-center gap-2">
+                <div className="relative flex h-6 min-w-28 flex-1 items-center">
+                  <div className="clip-meta flex min-w-0 items-center gap-1.5 overflow-hidden text-[11px] text-muted-foreground">
+                    {clip.is_pinned ? <Pin className="size-3 shrink-0 text-primary" aria-label={t.unpin} /> : null}
+                    <TypeTag type={clip.content_type} label={typeLabel} />
+                    {clip.source_app && clip.source_app !== "—" ? (
+                        <span className="truncate" title={clip.source_app}>{clip.source_app}</span>
+                    ) : null}
+                    {clip.is_truncated ? <span className="shrink-0 text-amber-700 dark:text-amber-400" title="TRUNC">…</span> : null}
+                  </div>
+                  <div className="clip-actions absolute left-0 top-1/2 flex h-7 w-28 -translate-y-1/2 items-center">
+                    <GroupSelect
+                        groups={groups}
+                        currentGroupId={clip.group_id}
+                        onSelect={(groupId) => onMoveGroup(clip.id, groupId)}
+                    />
+                    <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-7 w-7 rounded text-muted-foreground hover:bg-background hover:text-foreground"
+                        title={t.copy}
+                        aria-label={t.copy}
+                        onClick={() => onRecopy(clip.id)}
+                    >
+                      <Copy className="size-3.5" />
+                    </Button>
+                    <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-7 w-7 rounded text-muted-foreground hover:bg-background hover:text-foreground"
+                        title={clip.is_pinned ? t.unpin : t.pin}
+                        aria-label={clip.is_pinned ? t.unpin : t.pin}
+                        onClick={() => onPinToggle(clip.id, !clip.is_pinned)}
+                    >
+                      {clip.is_pinned ? <PinOff className="size-3.5" /> : <Pin className="size-3.5" />}
+                    </Button>
+                    <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-7 w-7 rounded text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+                        title={t.delete}
+                        aria-label={t.delete}
+                        onClick={() => onDelete(clip.id)}
+                    >
+                      <Trash2 className="size-3.5" />
+                    </Button>
+                  </div>
+                </div>
+                <div className="flex min-w-0 items-center gap-1.5 text-[11px] text-muted-foreground">
+                  {showGroupName && groupName ? (
+                      <>
+                        <span className="max-w-20 truncate" title={groupName}>{groupName}</span>
+                        <span className="shrink-0" aria-hidden="true">·</span>
+                      </>
+                  ) : null}
+                  <time
+                      className="clip-time shrink-0 whitespace-nowrap tabular-nums"
+                      dateTime={clip.last_used_at || clip.created_at}
+                      title={time.title}
+                  >{time.label}</time>
+                </div>
               </div>
             </div>
 

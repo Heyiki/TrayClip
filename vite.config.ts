@@ -19,6 +19,10 @@ export default defineConfig({
   server: {
     port: 1420,
     strictPort: true,
+    watch: {
+      // Cargo watches the backend; its build artifacts must not enter Vite's watcher.
+      ignored: ["**/src-tauri/**"],
+    },
   },
   envPrefix: ["VITE_", "TAURI_"],
   build: {
