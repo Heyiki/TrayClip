@@ -592,19 +592,17 @@ fn make_key_input(vk: u16, flags: u32) -> INPUT {
 
 /// Not an IPC command: quick paste drives it from `hide_window`, and the webview has no
 /// reason to synthesize Ctrl+V on its own.
+#[cfg(target_os = "windows")]
 fn simulate_paste() -> Result<(), String> {
-    #[cfg(target_os = "windows")]
-    {
-        let inputs = [
-            make_key_input(VK_CONTROL, 0),
-            make_key_input(0x56, 0), // 'V'
-            make_key_input(0x56, KEYEVENTF_KEYUP),
-            make_key_input(VK_CONTROL, KEYEVENTF_KEYUP),
-        ];
-        let sent = unsafe { SendInput(inputs.len() as u32, inputs.as_ptr(), std::mem::size_of::<INPUT>() as i32) };
-        if sent != inputs.len() as u32 {
-            return Err("SendInput failed".into());
-        }
+    let inputs = [
+        make_key_input(VK_CONTROL, 0),
+        make_key_input(0x56, 0), // 'V'
+        make_key_input(0x56, KEYEVENTF_KEYUP),
+        make_key_input(VK_CONTROL, KEYEVENTF_KEYUP),
+    ];
+    let sent = unsafe { SendInput(inputs.len() as u32, inputs.as_ptr(), std::mem::size_of::<INPUT>() as i32) };
+    if sent != inputs.len() as u32 {
+        return Err("SendInput failed".into());
     }
     Ok(())
 }
