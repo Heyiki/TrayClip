@@ -97,7 +97,7 @@ function App() {
             <div className="container header-inner">
                 <a className="brand" href="#" aria-label={t.home}><img src={logo} width="32" height="32" alt="" />TrayClip</a>
                 <nav id="navigation" className={menuOpen ? "navigation is-open" : "navigation"} aria-label={t.navigation} onClick={() => setMenuOpen(false)}>
-                    <a href="#features">{t.features}</a><a href="#preview">{t.preview}</a><a href="#faq">{t.faq}</a>
+                    <a href="#preview">{t.preview}</a><a href="#features">{t.features}</a><a href="#faq">{t.faq}</a>
                     <ExternalLink href={REPOSITORY} className="github-nav"><Code2 size={17} />GitHub<ArrowRight size={14} /></ExternalLink>
                     <a className="nav-download" href="#download"><ArrowDownToLine size={15} />{t.download}</a>
                 </nav>
