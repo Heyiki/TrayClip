@@ -3,6 +3,8 @@ node_modules/
 
 # Build output
 dist/
+dist-website/
+website/qa/
 src-tauri/target/
 
 # IDE

@@ -4,6 +4,10 @@
   "version": "0.3.0",
   "type": "module",
   "scripts": {
+    "website:dev": "vite --config website/vite.config.ts --host 127.0.0.1",
+    "website:build": "tsc -p website/tsconfig.json && vite build --config website/vite.config.ts",
+    "website:preview": "vite preview --config website/vite.config.ts --host 127.0.0.1",
+    "website:test": "node --test website/tests/releases.test.mjs",
     "dev": "vite",
     "build": "tsc && vite build",
     "typecheck": "tsc --noEmit",

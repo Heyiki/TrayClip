@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <script>
+        (() => {
+            let theme;
+            try { theme = localStorage.getItem("trayclip-website-theme"); } catch {}
+            const resolved = theme === "dark" || theme === "light" ? theme
+                : matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+            document.documentElement.dataset.theme = resolved;
+            document.documentElement.style.colorScheme = resolved;
+            document.documentElement.style.backgroundColor = resolved === "dark" ? "#191a1d" : "#ffffff";
+        })();
+    </script>
+    <meta name="theme-color" content="#ffffff" />
+    <meta name="description" content="TrayClip 是轻量、本地优先的开源剪贴板管理工具。保存历史、搜索内容、分组置顶，为 Windows、macOS 和 Linux 提供下载入口。" />
+    <meta property="og:title" content="TrayClip · 轻量、本地优先的剪贴板管理工具" />
+    <meta property="og:description" content="复制过的，随时找得到。了解 TrayClip，下载桌面应用，探索开源项目。" />
+    <meta property="og:type" content="website" />
+    <title>TrayClip · 轻量、本地优先的剪贴板管理工具</title>
+    <link rel="icon" type="image/png" href="../public/logo.png" />
+</head>
+<body>
+<div id="root"></div>
+<script type="module" src="./src/main.tsx"></script>
+</body>
+</html>
