@@ -348,7 +348,7 @@ fn show_main_window(app: &tauri::AppHandle) {
         position_main_window(&window, &panel_position);
         let _ = window.show();
         let _ = window.set_focus();
-        let _ = window.emit("focus-main-search", ());
+        let _ = window.emit("focus-main-list", ());
     }
 }
 

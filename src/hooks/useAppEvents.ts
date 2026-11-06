@@ -3,6 +3,7 @@ import { listen } from "@tauri-apps/api/event";
 import { hideWindow } from "@/lib/api";
 import type { AppSettings, ConfirmState } from "@/lib/types";
 import { useCloseWindowAction } from "@/hooks/useCloseWindowAction";
+import { hasKeyboardOverlay, hasPrimaryModifier } from "@/lib/keyboard";
 
 interface UseAppEventsParams {
     loadClips: (groupId?: number | null) => Promise<void>;
@@ -10,6 +11,7 @@ interface UseAppEventsParams {
     scrollRef: RefObject<HTMLDivElement | null>;
     searchInputRef: RefObject<HTMLInputElement | null>;
     focusSearch: (selectText?: boolean) => void;
+    focusList: () => void;
     confirm: ConfirmState | null;
     activeTab: string;
     search: string;
@@ -28,6 +30,7 @@ export function useAppEvents({
                                  scrollRef,
                                  searchInputRef,
                                  focusSearch,
+                                 focusList,
                                  confirm,
                                  activeTab,
                                  search,
@@ -54,9 +57,8 @@ export function useAppEvents({
             window.clearTimeout(refreshTimer);
             refreshTimer = window.setTimeout(() => { void loadClips(); }, 200);
         }).then(register);
-        void listen("focus-main-search", () => {
-            scrollRef.current?.scrollTo(0, 0);
-            focusSearch(true);
+        void listen("focus-main-list", () => {
+            if (!hasKeyboardOverlay()) focusList();
         }).then(register);
         void listen("close-requested", () => {
             handleCloseWindow();
@@ -67,17 +69,22 @@ export function useAppEvents({
             window.clearTimeout(refreshTimer);
             unlistens.forEach((fn) => fn());
         };
-    }, [focusSearch, handleCloseWindow, loadClips, scrollRef]);
+    }, [focusList, handleCloseWindow, loadClips]);
 
-    // Escape key handler
+    // Window-local search and Escape shortcuts.
     useEffect(() => {
         const handleKeydown = (event: KeyboardEvent) => {
-            if (confirm || activeTab !== "clips") return;
-            if (event.key !== "Escape") return;
+            if (confirm || activeTab !== "clips" || event.defaultPrevented || event.isComposing || document.hidden || hasKeyboardOverlay()) return;
             const target = event.target as HTMLElement | null;
             const isEditable = !!target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable);
             const isSearchInput = target === searchInputRef.current;
             if (isEditable && !isSearchInput) return;
+            if (hasPrimaryModifier(event) && event.key.toLowerCase() === "f") {
+                event.preventDefault();
+                focusSearch(true);
+                return;
+            }
+            if (event.key !== "Escape") return;
             event.preventDefault();
             if (search) { setSearch(""); focusSearch(false); return; }
             void hideWindow();

@@ -91,6 +91,18 @@ export default function App() {
     });
   }, []);
 
+  const focusList = useCallback(() => {
+    setActiveTab("clips");
+    setSearchResetKey((key) => key + 1);
+    window.requestAnimationFrame(() => {
+      scrollRef.current?.focus({ preventScroll: true });
+    });
+  }, []);
+
+  useEffect(() => {
+    if (data.loaded) focusList();
+  }, [data.loaded, focusList]);
+
   // Event listeners
   useAppEvents({
     loadClips: data.loadClips,
@@ -98,6 +110,7 @@ export default function App() {
     scrollRef,
     searchInputRef,
     focusSearch,
+    focusList,
     confirm,
     activeTab,
     search,
@@ -207,6 +220,7 @@ export default function App() {
                       />
                       <input
                           ref={searchInputRef}
+                          data-clip-search
                           value={search}
                           onChange={(e) => setSearch(e.target.value)}
                           placeholder={activeTypeLabel ? t.searchInType(activeTypeLabel) : t.searchPlaceholder}

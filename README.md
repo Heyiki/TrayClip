@@ -54,8 +54,11 @@ English | [简体中文](README_ZH.md)
 | Function | Windows / Linux | macOS |
 | --- | --- | --- |
 | Open main window | `Ctrl+Shift+V` | `⌃+P` |
+| Copy result 1 through 9 | `Ctrl+1` through `Ctrl+9` | `Command+1` through `Command+9` |
+| Focus search | `Ctrl+F` | `Command+F` |
+| Select / copy selected record | `↑` / `↓`, then `Enter` | `↑` / `↓`, then `Enter` |
 
-Hotkeys can be customized in Settings.
+The global shortcut for opening the main window can be customized in Settings. Other shortcuts are fixed and window-local. Opening the window focuses the list, not search; press an arrow key to select the first result. Number shortcuts follow the current filtered list's first nine results, even while search has focus. See [Help](HELP.md#keyboard-shortcuts) for focus rules and exceptions.
 
 ## Help
 
