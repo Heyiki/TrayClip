@@ -144,7 +144,12 @@ function App() {
             <Downloads t={t} />
             <section id="faq" className="faq-section container">
                 <div data-reveal><p className="eyebrow">{t.faqEyebrow}</p><h2>{t.faqHeading}</h2><ExternalLink href={`${REPOSITORY}/issues`} className="text-link">{t.ask} <ArrowRight size={16} /></ExternalLink></div>
-                <div className="faq-list" data-reveal>{t.faqItems.map(([question, answer], index) => <details key={index}><summary>{question}<ChevronDown size={18} /></summary><p>{answer}</p></details>)}</div>
+                <div className="faq-list" data-reveal>{t.faqItems.map(([question, answer, command, note], index) => <details key={index}>
+                    <summary>{question}<ChevronDown size={18} /></summary>
+                    <p>{answer}</p>
+                    {command && <pre className="faq-command"><code>{command}</code></pre>}
+                    {note && <p>{note}</p>}
+                </details>)}</div>
             </section>
         </main>
         <footer className="container site-footer"><a href="#" className="brand"><img src={logo} width="26" height="26" alt="" />TrayClip</a><span>{t.footer}</span><div><ExternalLink href={`${REPOSITORY}/blob/HEAD/LICENSE`}>MIT License</ExternalLink><ExternalLink href={RELEASES}>Releases</ExternalLink><a href="#main" aria-label={t.backTop} title={t.backTop}><ArrowDown size={17} className="back-top" /></a></div></footer>

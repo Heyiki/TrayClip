@@ -115,7 +115,7 @@ kbd { font: inherit; border: 1px solid var(--line); border-bottom-width: 2px; bo
 .download-note svg { align-self: center; }
 .faq-section { display: grid; grid-template-columns: 1fr 1.6fr; gap: 64px; padding-block: 72px; }
 .faq-section .text-link { margin-top: 20px; color: var(--muted); }
-.faq-list { border-top: 1px solid var(--line); }
+.faq-list { min-width: 0; border-top: 1px solid var(--line); }
 .faq-list details { border-bottom: 1px solid var(--line); }
 .faq-list summary { display: flex; align-items: center; justify-content: space-between; gap: 20px; cursor: pointer; list-style: none; font-size: 16px; font-weight: 500; min-height: 64px; padding-block: 16px; }
 .faq-list summary::-webkit-details-marker { display: none; }
@@ -123,6 +123,7 @@ kbd { font: inherit; border: 1px solid var(--line); border-bottom-width: 2px; bo
 .faq-list summary svg { color: var(--muted); transition: transform .2s; }
 .faq-list details[open] summary svg { transform: rotate(180deg); }
 .faq-list p { color: var(--muted); font-size: 16px; padding-bottom: 24px; line-height: 1.8; }
+.faq-command { margin: 0 0 24px; padding: 16px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); font-size: 13px; line-height: 1.8; white-space: pre-wrap; overflow-wrap: anywhere; }
 .site-footer { display: flex; align-items: center; justify-content: space-between; gap: 20px; padding-block: 28px; border-top: 1px solid var(--line); color: var(--muted); font-size: 12px; }
 .site-footer .brand { font-size: 16px; color: var(--text); }
 .site-footer>div { display: flex; align-items: center; gap: 24px; }

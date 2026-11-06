@@ -51,6 +51,11 @@ try {
             await page.locator("img").evaluateAll(async (images) => {
                 await Promise.all(images.map((image) => { image.loading = "eager"; return image.decode(); }));
             });
+            const installation = page.locator("details").filter({ hasText: "macOS 提示无法验证开发者，如何安装？" });
+            await installation.locator("summary").click({ timeout: 5000 });
+            assert.equal(await installation.locator("code").innerText(),
+                'xattr -r -d com.apple.quarantine "/Applications/TrayClip.app"\nopen "/Applications/TrayClip.app"');
+            assert.ok((await installation.innerText()).includes("隐私与安全性"));
             const overflowing = await page.evaluate(() => document.documentElement.scrollWidth > innerWidth);
             if (overflowing) console.log(await page.locator("body *").evaluateAll((elements) => elements.filter((element) => {
                 const box = element.getBoundingClientRect(); return box.width > 0 && box.right > innerWidth + 1;
@@ -60,6 +65,7 @@ try {
             assert.equal(await page.locator("img").evaluateAll((images) => images.every((image) => image.complete && image.naturalWidth > 0)), true);
             assert.equal(await page.locator('a[href*="qaydt20250317"]').count(), 0);
             await page.screenshot({ path: new URL(`../qa/home-${width}.png`, import.meta.url).pathname.slice(1), fullPage: true });
+            await installation.locator("summary").click();
         }
         await page.getByRole("button", { name: "打开导航" }).click();
         await page.locator("#navigation").getByRole("link", { name: "下载", exact: true }).click();
@@ -116,6 +122,13 @@ try {
                     await view.setViewportSize({ width, height: 900 });
                     await view.goto(origin);
                     await view.locator(".asset-link").first().waitFor();
+                    const installation = view.locator("details").filter({
+                        hasText: locale === "zh-CN" ? "macOS 提示无法验证开发者，如何安装？" : "How do I install on macOS if the developer cannot be verified?",
+                    });
+                    await installation.locator("summary").click();
+                    assert.equal(await installation.locator("code").innerText(),
+                        'xattr -r -d com.apple.quarantine "/Applications/TrayClip.app"\nopen "/Applications/TrayClip.app"');
+                    assert.ok((await installation.innerText()).includes(locale === "zh-CN" ? "会损害你的电脑" : "will damage your computer"));
                     assert.equal(await view.locator("html").getAttribute("lang"), locale === "zh-CN" ? "zh-CN" : "en");
                     assert.equal(await view.locator("html").getAttribute("data-theme"), colorScheme);
                     assert.equal(await view.evaluate(() => document.documentElement.scrollWidth > innerWidth), false, `${locale}/${colorScheme}/${width} overflow`);
