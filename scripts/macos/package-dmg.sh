@@ -34,12 +34,12 @@ on run argv
         open dmgFolder
         set dmgWindow to container window of dmgFolder
         set current view of dmgWindow to icon view
-        set bounds of dmgWindow to {200, 120, 860, 560}
+        set bounds of dmgWindow to {200, 120, 1040, 460}
         set arrangement of icon view options of dmgWindow to not arranged
         set icon size of icon view options of dmgWindow to 64
         set position of item "TrayClip.app" of dmgFolder to {180, 150}
         set position of item "Applications" of dmgFolder to {480, 150}
-        set position of item "README.txt" of dmgFolder to {330, 300}
+        set position of item "README.txt" of dmgFolder to {700, 150}
         update dmgFolder without registering applications
         close dmgWindow
     end tell
