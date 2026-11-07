@@ -80,6 +80,9 @@ jobs:
       - name: Install frontend dependencies
         run: npm ci
 
+      - name: Build frontend for Rust tests
+        run: npm run build
+
       - uses: actions/setup-python@v5
         with:
           python-version: "3.x"
@@ -92,10 +95,12 @@ jobs:
         run: python scripts/ocr/test-package-engine.py
 
       - name: Test main application without OCR runtime
+        run: cargo test --locked --manifest-path src-tauri/Cargo.toml
+
+      - name: Verify main application excludes OCR inference dependencies
         shell: bash
         run: |
           set -euo pipefail
-          cargo test --locked --manifest-path src-tauri/Cargo.toml
           if cargo tree --locked --prefix none --manifest-path src-tauri/Cargo.toml | grep -E '^(paddle-ocr-rs|ort|ort-sys|imageproc) v'; then
             echo "OCR inference dependencies leaked into the main application"
             exit 1

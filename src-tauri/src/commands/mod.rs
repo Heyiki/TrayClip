@@ -80,7 +80,7 @@ pub(crate) fn remove_managed_images(state: &AppState, image_paths: Vec<String>) 
     }
 }
 
-#[cfg(target_os = "windows")]
+#[cfg(any(target_os = "windows", test))]
 fn resolve_hide_window_action(paste_after: bool, previous_hwnd: usize) -> Option<usize> {
     if paste_after && previous_hwnd != 0 {
         return Some(previous_hwnd);
