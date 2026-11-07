@@ -125,7 +125,8 @@ jobs:
           "$executable" --self-test
           python scripts/ocr/collect-notices.py --target "$TARGET" --output src-tauri/target/ocr-dist/THIRD-PARTY-NOTICES.txt
           python scripts/ocr/package-engine.py --executable "$executable" --target "$TARGET" --version "$engine_version" --tag "$GITHUB_REF_NAME" --license src-tauri/target/ocr-dist/THIRD-PARTY-NOTICES.txt --output src-tauri/target/ocr-dist
-          echo "TRAYCLIP_OCR_MANIFEST=$(pwd)/src-tauri/target/ocr-dist/ocr-engine-$TARGET.json" >> "$GITHUB_ENV"
+          manifest_path=$(python -c "import os; from pathlib import Path; print(Path('src-tauri/target/ocr-dist', 'ocr-engine-' + os.environ['TARGET'] + '.json').resolve(strict=True))")
+          echo "TRAYCLIP_OCR_MANIFEST=$manifest_path" >> "$GITHUB_ENV"
 
       - name: Verify Windows installer icon
         if: matrix.platform == 'windows-latest'
