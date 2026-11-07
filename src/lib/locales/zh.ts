@@ -66,6 +66,7 @@ export const zh = {
   ocrDownloadingModels: "正在下载 OCR 模型...",
   ocrVerifying: "正在校验并安装...",
   ocrImport: "导入引擎包",
+  ocrBrowserDownload: "浏览器下载",
   ocrEngine: "引擎",
   ocrEngineReady: "引擎已安装",
   ocrMissingModels: "缺失模型",

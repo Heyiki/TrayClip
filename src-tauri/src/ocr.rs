@@ -37,6 +37,7 @@ pub struct OcrStatus {
     missing_model_bytes: u64,
     engine_version: Option<String>,
     engine_asset: Option<String>,
+    engine_url: Option<String>,
 }
 
 struct Model {
@@ -171,10 +172,12 @@ fn status(root: &Path) -> OcrStatus {
             models_ready: missing == 0, engine_bytes: Some(manifest.archive_size),
             missing_models: missing, missing_model_bytes: missing_bytes, engine_version: Some(manifest.version.clone()),
             engine_asset: manifest.url.rsplit('/').next().map(str::to_owned),
+            engine_url: Some(manifest.url),
         },
         Err(_) => OcrStatus {
             engine_available: false, engine_ready: false, models_ready: missing == 0,
             engine_bytes: None, missing_models: missing, missing_model_bytes: missing_bytes, engine_version: None, engine_asset: None,
+            engine_url: None,
         },
     }
 }

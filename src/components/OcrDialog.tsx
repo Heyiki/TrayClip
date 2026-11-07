@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Check, Copy, Download, FolderOpen, LoaderCircle, RotateCcw } from "lucide-react";
+import { Check, Copy, Download, ExternalLink, FolderOpen, LoaderCircle, RotateCcw } from "lucide-react";
 import { open } from "@tauri-apps/plugin-dialog";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import { getOcrStatus, installOcr, recognizeClipImage, type OcrProgress, type OcrStatus } from "@/lib/api";
 import { useTranslation } from "@/lib/i18n";
 import { Button } from "@/components/ui/button";
@@ -96,6 +97,16 @@ export function OcrDialog({ clipId, imagePath, onClose }: OcrDialogProps) {
         }
     };
 
+    const downloadInBrowser = async () => {
+        if (!status?.engine_url) return;
+        setError("");
+        try {
+            await openUrl(status.engine_url);
+        } catch (reason) {
+            if (active.current) setError(String(reason));
+        }
+    };
+
     return (
         <Dialog open onOpenChange={(open) => { if (!open) onClose(); }}>
             <DialogContent
@@ -139,6 +150,9 @@ export function OcrDialog({ clipId, imagePath, onClose }: OcrDialogProps) {
                                     <Button size="sm" onClick={() => void install(false)}>
                                         <Download className="size-4" />{t.ocrDownload}
                                     </Button>
+                                    {!status.engine_ready && status.engine_url ? <Button size="sm" variant="outline" onClick={() => void downloadInBrowser()}>
+                                        <ExternalLink className="size-4" />{t.ocrBrowserDownload}
+                                    </Button> : null}
                                     {!status.engine_ready ? <Button size="sm" variant="outline" onClick={() => void install(true)}>
                                         <FolderOpen className="size-4" />{t.ocrImport}
                                     </Button> : null}

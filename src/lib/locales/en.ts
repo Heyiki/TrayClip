@@ -63,6 +63,7 @@ export const en: typeof zh = {
   ocrDownloadingModels: "Downloading OCR models...",
   ocrVerifying: "Verifying and installing...",
   ocrImport: "Import engine",
+  ocrBrowserDownload: "Download in browser",
   ocrEngine: "Engine",
   ocrEngineReady: "Engine installed",
   ocrMissingModels: "Missing models",

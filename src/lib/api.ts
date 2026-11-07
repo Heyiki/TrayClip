@@ -23,6 +23,7 @@ export interface OcrStatus {
   missing_model_bytes: number;
   engine_version: string | null;
   engine_asset: string | null;
+  engine_url: string | null;
 }
 export interface OcrProgress {
   phase: "engine" | "models" | "verifying";

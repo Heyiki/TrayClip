@@ -12,13 +12,22 @@ let attempts = 0;
 let ready = params.has("ready");
 const pause = () => new Promise((resolve) => setTimeout(resolve, 200));
 mockIPC(async (cmd, payload) => {
+    if (Array.isArray(payload) || payload instanceof ArrayBuffer || ArrayBuffer.isView(payload)) {
+        throw new Error(`Expected an object payload for ${cmd}`);
+    }
     if (cmd === "get_ocr_status") return {
-        engine_available: !params.has("unavailable"), engine_ready: ready,
+        engine_available: !params.has("unavailable"), engine_ready: ready || params.has("engine"),
         models_ready: ready || params.has("models"), engine_bytes: 10 * 1024 * 1024,
         missing_models: ready || params.has("models") ? 0 : 3,
         missing_model_bytes: ready || params.has("models") ? 0 : 16_189_007,
         engine_version: "0.1.0", engine_asset: "trayclip-ocr-0.1.0-test.zip",
+        engine_url: params.has("unavailable") ? null : "https://github.com/Heyiki/TrayClip/releases/download/v0.3.2/trayclip-ocr-0.1.0-x86_64-pc-windows-msvc.zip",
     };
+    if (cmd === "plugin:opener|open_url") {
+        if (params.has("browserfail")) throw new Error("Browser unavailable");
+        document.getElementById("root")!.dataset.openedUrl = String(payload?.url);
+        return null;
+    }
     if (cmd === "plugin:dialog|open") return params.has("cancel") ? null : "C:/offline/engine.zip";
     if (cmd === "install_ocr") {
         if (params.has("offline") && payload?.archivePath !== "C:/offline/engine.zip") throw new Error("Expected offline archive");

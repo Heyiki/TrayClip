@@ -1,7 +1,7 @@
 export const messages = {
     "zh-CN": {
         title: "TrayClip · 轻量、本地优先的剪贴板管理工具",
-        description: "TrayClip 是轻量、本地优先的开源剪贴板管理工具。保存历史、搜索内容、分组置顶，为 Windows、macOS 和 Linux 提供下载入口。",
+        description: "TrayClip 是轻量、本地优先的开源剪贴板管理工具。保存历史、搜索内容、分组置顶，支持离线 OCR 图片文字识别，为 Windows、macOS 和 Linux 提供下载入口。",
         skip: "跳转到正文", home: "TrayClip 首页", openMenu: "打开导航", closeMenu: "关闭导航", navigation: "主导航",
         features: "功能", preview: "产品一览", faq: "常见问题", download: "下载", downloadApp: "下载 TrayClip", source: "查看源代码",
         language: "语言", languageAuto: "跟随浏览器", appearance: "外观", themeAuto: "跟随系统", light: "亮色", dark: "暗色",
@@ -17,6 +17,7 @@ export const messages = {
             { name: "记录与搜索", text: "自动收集文字、富文本、图片和文件路径，按内容或来源应用搜索。", tag: "历史记录" },
             { name: "分组与置顶", text: "按项目或用途建立分组。置顶的条目不会随历史记录自动清理。", tag: "分组管理" },
             { name: "快捷调用", text: "唤起后直接用 ↑ / ↓ 选择、Enter 复制。Ctrl+1～9 复制前九条，Ctrl+F 搜索；macOS 使用 Command。Windows 支持复制后自动粘贴。", tag: "快捷调用" },
+            { name: "离线图片文字识别", text: "从剪贴板图片中提取文字，编辑后即可复制。OCR 引擎和模型按需下载，准备完成后在本机离线识别，图片不上传。", tag: "离线 OCR" },
             { name: "备份与恢复", text: "将本地记录导出为 ZIP，在需要时恢复数据。无需账号，也没有云端同步。", tag: "本地优先" },
             { name: "中英文与亮暗主题", text: "应用支持简体中文、英文及亮暗主题，适应不同的桌面环境。", tag: "外观" },
             { name: "可选翻译与 AI", text: "在线翻译、摘要与关键词提取按需使用。AI 接口由你配置，相关文本发送至对应服务。", tag: "可选 AI" },
@@ -43,7 +44,8 @@ export const messages = {
         faqEyebrow: "使用之前", faqHeading: "常见问题", ask: "在 GitHub 提问",
         faqItems: [
             ["需要注册账号吗？", "不需要。安装后即可使用剪贴板历史、搜索、分组与置顶等本地功能。"],
-            ["剪贴板内容会上传吗？", "剪贴板历史默认保存在本机，不做云端同步。使用在线翻译或 AI 功能时，相关文本会发送至对应服务；AI 服务使用你配置的接口。"],
+            ["剪贴板内容会上传吗？", "剪贴板历史默认保存在本机，不做云端同步。OCR 在本机识别，图片不上传。使用在线翻译或 AI 功能时，相关文本会发送至对应服务；AI 服务使用你配置的接口。"],
+            ["OCR 需要联网吗？下载失败怎么办？", "首次使用需要下载独立的 OCR 引擎和模型，不增加主安装包中的推理运行库；准备完成后可离线识别。如果自动下载引擎失败，可在 OCR 弹窗点击“浏览器下载”，下载当前应用版本与设备平台对应的引擎 ZIP，再选择“导入引擎包”。浏览器下载仍访问 GitHub，不是镜像渠道；导入后仍需下载缺失的模型。"],
             ["支持哪些系统？", "项目支持 Windows、macOS 和 Linux。可下载的系统与处理器架构以 GitHub 当前公开发行包为准；快捷粘贴仅适用于 Windows。"],
             ["macOS 提示无法验证开发者，如何安装？", "打开 DMG 后，将 TrayClip.app 拖入 Applications（应用程序）。当前安装包使用临时签名，尚未经过 Apple Developer ID 签名和公证，首次打开可能被拦截。请先确认安装包来自 Heyiki/TrayClip 官方 GitHub Releases，再尝试打开，并到“系统设置 > 隐私与安全性”选择“仍要打开”。也可在终端逐行执行以下命令（假定应用已安装到 /Applications；其他位置请修改路径）：",
                 'xattr -r -d com.apple.quarantine "/Applications/TrayClip.app"\nopen "/Applications/TrayClip.app"',
@@ -57,7 +59,7 @@ export const messages = {
     },
     en: {
         title: "TrayClip · A lightweight, local-first clipboard manager",
-        description: "TrayClip is a lightweight, open-source clipboard manager. Keep your history, search, group and pin your clips. Download for Windows, macOS and Linux.",
+        description: "TrayClip is a lightweight, open-source clipboard manager with offline image OCR. Keep your history, search, group and pin your clips. Download for Windows, macOS and Linux.",
         skip: "Skip to content", home: "TrayClip home", openMenu: "Open navigation", closeMenu: "Close navigation", navigation: "Main navigation",
         features: "Features", preview: "Inside TrayClip", faq: "FAQ", download: "Download", downloadApp: "Download TrayClip", source: "View source",
         language: "Language", languageAuto: "Browser default", appearance: "Appearance", themeAuto: "System default", light: "Light", dark: "Dark",
@@ -73,6 +75,7 @@ export const messages = {
             { name: "History & search", text: "Capture text, rich text, images and file paths automatically. Search by content or source app.", tag: "Clipboard history" },
             { name: "Groups & pins", text: "Group clips by project or purpose. Pinned items stay out of automatic history cleanup.", tag: "Organization" },
             { name: "Quick access", text: "Open, select with arrow keys and copy with Enter. Ctrl+1–9 copies the first nine results; Ctrl+F searches. Use Command on macOS. Windows also supports quick paste.", tag: "Quick access" },
+            { name: "Offline image OCR", text: "Extract text from clipboard images, then edit and copy it. Download the OCR engine and models on demand; once ready, recognition runs offline on your device without uploading images.", tag: "Offline OCR" },
             { name: "Backup & restore", text: "Export local records to a ZIP and restore them when needed. No account or cloud sync.", tag: "Local first" },
             { name: "Language & appearance", text: "Chinese and English interfaces, with light and dark themes for your desktop.", tag: "Appearance" },
             { name: "Optional translation & AI", text: "Translate, summarize or extract keywords on demand. AI uses your configured endpoint; selected text is sent to the service.", tag: "Optional AI" },
@@ -99,7 +102,8 @@ export const messages = {
         faqEyebrow: "Before you install", faqHeading: "Common questions", ask: "Ask on GitHub",
         faqItems: [
             ["Do I need an account?", "No. Install TrayClip and start using local clipboard history, search, groups and pins."],
-            ["Does my clipboard get uploaded?", "Clipboard history is stored on your device, without cloud sync. Online translation and AI features send the relevant text to the service you use. AI requests use your configured endpoint."],
+            ["Does my clipboard get uploaded?", "Clipboard history is stored on your device, without cloud sync. OCR runs locally without uploading images. Online translation and AI features send the relevant text to the service you use. AI requests use your configured endpoint."],
+            ["Does OCR need internet access? What if the download fails?", "First use requires downloading a separate OCR engine and models, keeping inference libraries out of the main installer. Once ready, recognition works offline. If the engine download fails, choose Download in browser in the OCR dialog to get the engine ZIP pinned to your app version and platform, then choose Import engine. Browser downloads still use GitHub, not a mirror. Missing models must still be downloaded after importing the engine."],
             ["Which platforms are supported?", "TrayClip supports Windows, macOS and Linux. Available installers and architectures depend on the current public GitHub release. Quick paste is Windows-only."],
             ["How do I install on macOS if the developer cannot be verified?", "Open the DMG and drag TrayClip.app into Applications. Current builds are ad-hoc signed, without Apple Developer ID signing or notarization, so macOS may block the first launch. Verify that the installer came from the official Heyiki/TrayClip GitHub Releases, try opening it, then choose Open Anyway in System Settings > Privacy & Security. Alternatively, run these commands one at a time in Terminal (assuming the app is in /Applications; adjust the path if needed):",
                 'xattr -r -d com.apple.quarantine "/Applications/TrayClip.app"\nopen "/Applications/TrayClip.app"',
