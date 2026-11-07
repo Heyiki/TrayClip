@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { Channel, invoke } from "@tauri-apps/api/core";
 import type { AppSettings, ClipGroup, ConfigPayload, HotkeyActionKey, HotkeySetting, ListClipsRequest, ListClipsResponse } from "./types";
 
 export const getConfig = () => invoke<ConfigPayload>("get_config");
@@ -14,6 +14,30 @@ export const recopyImage = (filePath: string) => invoke("recopy_image", { filePa
  * are granted, so this cannot be used as a general file reader.
  */
 export const allowImagePreview = (path: string) => invoke<boolean>("allow_image_preview", { path });
+export interface OcrStatus {
+  engine_available: boolean;
+  engine_ready: boolean;
+  models_ready: boolean;
+  engine_bytes: number | null;
+  missing_models: number;
+  missing_model_bytes: number;
+  engine_version: string | null;
+  engine_asset: string | null;
+}
+export interface OcrProgress {
+  phase: "engine" | "models" | "verifying";
+  name: string;
+  downloaded: number;
+  total: number | null;
+}
+export const getOcrStatus = () => invoke<OcrStatus>("get_ocr_status");
+export const installOcr = (archivePath: string | null, onProgress: (progress: OcrProgress) => void) => {
+  const channel = new Channel<OcrProgress>();
+  channel.onmessage = onProgress;
+  return invoke<void>("install_ocr", { archivePath, onProgress: channel });
+};
+export const recognizeClipImage = (clipId: number, imagePath: string) =>
+    invoke<string>("recognize_clip_image", { clipId, imagePath });
 export const saveGroup = (groupId: number | null, groupName: string) => invoke<ClipGroup>("save_group", { groupId, groupName });
 export const deleteGroup = (groupId: number) => invoke("delete_group", { groupId });
 export const moveClipToGroup = (clipId: number, groupId: number | null) => invoke("move_clip_to_group", { clipId, groupId });

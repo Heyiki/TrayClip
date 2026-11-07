@@ -9,7 +9,32 @@ permissions:
   contents: write
 
 jobs:
+  prepare-release:
+    runs-on: ubuntu-22.04
+    outputs:
+      publish: ${{ steps.repository.outputs.publish }}
+    steps:
+      - uses: actions/checkout@v6
+      - name: Check configured distribution repository
+        id: repository
+        run: |
+          repository=$(python3 scripts/distribution.py)
+          if [[ "${GITHUB_REPOSITORY,,}" == "${repository,,}" ]]; then
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+            echo "Skipping release: this checkout is not the configured distribution repository."
+          fi
+      - name: Prepare draft release
+        if: steps.repository.outputs.publish == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 || gh release create "$GITHUB_REF_NAME" --draft --title "TrayClip $GITHUB_REF_NAME" --notes "See the assets below to download and install."
+
   build:
+    needs: prepare-release
+    if: needs.prepare-release.outputs.publish == 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -55,6 +80,48 @@ jobs:
       - name: Install frontend dependencies
         run: npm ci
 
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: Configure Windows native dependency tools
+        if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Test OCR packaging
+        run: python scripts/ocr/test-package-engine.py
+
+      - name: Test main application without OCR runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo test --locked --manifest-path src-tauri/Cargo.toml
+          if cargo tree --locked --prefix none --manifest-path src-tauri/Cargo.toml | grep -E '^(paddle-ocr-rs|ort|ort-sys|imageproc) v'; then
+            echo "OCR inference dependencies leaked into the main application"
+            exit 1
+          fi
+
+      - name: Build separate OCR engine
+        run: cargo build --locked --release --manifest-path src-tauri/ocr-engine/Cargo.toml --target-dir src-tauri/target/ocr-engine --target ${{ matrix.target }}
+
+      - name: Sign macOS OCR engine before hashing
+        if: runner.os == 'macOS'
+        run: codesign --force --sign - --timestamp=none src-tauri/target/ocr-engine/${{ matrix.target }}/release/trayclip-ocr
+
+      - name: Package and embed pinned OCR engine manifest
+        shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          set -euo pipefail
+          executable="src-tauri/target/ocr-engine/$TARGET/release/trayclip-ocr"
+          if [[ "$RUNNER_OS" == "Windows" ]]; then executable="$executable.exe"; fi
+          engine_version=$(python -c "import tomllib; print(tomllib.load(open('src-tauri/ocr-engine/Cargo.toml', 'rb'))['package']['version'])")
+          "$executable" --self-test
+          python scripts/ocr/collect-notices.py --target "$TARGET" --output src-tauri/target/ocr-dist/THIRD-PARTY-NOTICES.txt
+          python scripts/ocr/package-engine.py --executable "$executable" --target "$TARGET" --version "$engine_version" --tag "$GITHUB_REF_NAME" --license src-tauri/target/ocr-dist/THIRD-PARTY-NOTICES.txt --output src-tauri/target/ocr-dist
+          echo "TRAYCLIP_OCR_MANIFEST=$(pwd)/src-tauri/target/ocr-dist/ocr-engine-$TARGET.json" >> "$GITHUB_ENV"
+
       - name: Verify Windows installer icon
         if: matrix.platform == 'windows-latest'
         shell: pwsh
@@ -79,3 +146,11 @@ jobs:
           releaseDraft: true
           prerelease: false
           args: --target ${{ matrix.target }} ${{ matrix.args }}
+
+      - name: Upload OCR engine alongside the application
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TARGET: ${{ matrix.target }}
+        run: |
+          gh release upload "$GITHUB_REF_NAME" src-tauri/target/ocr-dist/*-"$TARGET".zip src-tauri/target/ocr-dist/ocr-engine-"$TARGET".json --clobber

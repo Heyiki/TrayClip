@@ -6,9 +6,14 @@ mod commands;
 mod db;
 mod models;
 mod monitor;
+mod ocr;
 mod paths;
 mod placement;
 mod source_app;
+
+#[cfg(test)]
+#[path = "../distribution_config.rs"]
+mod distribution_config;
 
 use anyhow::Context;
 use app_state::AppState;
@@ -541,6 +546,9 @@ fn main() {
             commands::recopy_clip,
             commands::recopy_image,
             commands::allow_image_preview,
+            ocr::get_ocr_status,
+            ocr::install_ocr,
+            ocr::recognize_clip_image,
             commands::pin_toggle,
             commands::save_group,
             commands::delete_group,

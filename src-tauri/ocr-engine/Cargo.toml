@@ -1,0 +1,22 @@
+[package]
+name = "trayclip-ocr"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+publish = false
+
+[dependencies]
+anyhow = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "bmp", "webp", "gif", "tiff"] }
+paddle-ocr-rs = "=0.6.1"
+
+[patch.crates-io]
+paddle-ocr-rs = { path = "../vendor/paddle-ocr-rs" }
+
+[profile.release]
+strip = true
+lto = "thin"
+codegen-units = 1
+opt-level = "z"

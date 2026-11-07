@@ -1,5 +1,5 @@
 import { memo, useCallback, useMemo, useState } from "react";
-import { Copy, Expand, FileText, Files, Image, Pin, PinOff, Trash2 } from "lucide-react";
+import { Copy, Expand, FileText, Files, Image, Pin, PinOff, ScanText, Trash2 } from "lucide-react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import type { AppSettings, ClipGroup, ClipListItem } from "@/lib/types";
 import { useTranslation } from "@/lib/i18n";
@@ -18,6 +18,7 @@ import { GroupSelect } from "@/components/GroupSelect";
 import { LLMResultDialog } from "@/components/LLMResultDialog";
 import { TranslateDialog } from "@/components/TranslateDialog";
 import { ImagePreviewDialog } from "@/components/ImagePreviewDialog";
+import { OcrDialog } from "@/components/OcrDialog";
 import { getClipText, recopyImage } from "@/lib/api";
 import { formatClipTime } from "@/lib/clip-time";
 
@@ -121,6 +122,7 @@ export const ClipCard = memo(function ClipCard({
 
   const { llmState, enabled: llmEnabled, config: llmConfig, close: closeLlmDialog, handleExtractKeywords, handleSummarize } = useClipLlm(settings);
   const [translateOpen, setTranslateOpen] = useState(false);
+  const [ocrOpen, setOcrOpen] = useState(false);
   const [translateText, setTranslateText] = useState<string | null>(null);
 
   // A list row only carries a preview, so anything that works on the whole clip has to read
@@ -317,6 +319,9 @@ export const ClipCard = memo(function ClipCard({
             </div>
 
             {/* LLM Dialog */}
+            {ocrOpen && previewPaths[0] ? (
+                <OcrDialog clipId={clip.id} imagePath={previewPaths[0]} onClose={() => setOcrOpen(false)} />
+            ) : null}
             {previewPaths.length > 0 ? (
                 <ImagePreviewDialog
                     open={previewOpen}
@@ -362,6 +367,11 @@ export const ClipCard = memo(function ClipCard({
         </ContextMenuTrigger>
 
         <ContextMenuContent>
+          {previewPaths.length === 1 && !previewPaths[0].toLowerCase().endsWith(".svg") && !previewPaths[0].toLowerCase().endsWith(".ico") ? (
+              <ContextMenuItem onClick={() => setOcrOpen(true)}>
+                <ScanText className="size-4" />{t.ocrRecognize}
+              </ContextMenuItem>
+          ) : null}
           {clip.has_url ? (
               <ContextMenuItem onClick={() => void handleOpenLink()}>
                 {t.openLink}

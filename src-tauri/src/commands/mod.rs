@@ -707,7 +707,7 @@ pub async fn bing_translate(text: String, from: String, to: String) -> Result<St
 #[cfg(test)]
 mod tests {
     use super::{
-        check_backup_limits, restore_entry_budget, resolve_hide_window_action, safe_zip_entry_path,
+        check_backup_limits, restore_entry_budget, resolve_hide_window_action, safe_zip_entry_path, update_release_url,
         MAX_BACKUP_ENTRY_BYTES, MAX_BACKUP_ENTRIES, MAX_BACKUP_TOTAL_BYTES, MAX_DATABASE_BYTES,
     };
     use std::path::Path;
@@ -769,6 +769,15 @@ mod tests {
     }
 
     #[test]
+    fn update_release_url_uses_distribution_configuration() {
+        let config: serde_json::Value = serde_json::from_str(
+            include_str!("../../../config/distribution.json")).unwrap();
+        let repository = config["github_repository"].as_str().unwrap();
+        assert_eq!(update_release_url(),
+            format!("https://api.github.com/repos/{repository}/releases/latest"));
+    }
+
+    #[test]
     fn check_backup_limits_accepts_exactly_what_restore_accepts() {
         assert!(check_backup_limits(MAX_DATABASE_BYTES, 0, 0).is_ok());
         assert!(check_backup_limits(0, MAX_BACKUP_TOTAL_BYTES, 0).is_ok());
@@ -780,7 +789,9 @@ mod tests {
     }
 }
 
-const GITHUB_REPO: &str = "Heyiki/TrayClip";
+fn update_release_url() -> String {
+    format!("https://api.github.com/repos/{}/releases/latest", env!("TRAYCLIP_GITHUB_REPOSITORY"))
+}
 
 #[derive(serde::Serialize)]
 pub struct UpdateInfo {
@@ -792,7 +803,7 @@ pub struct UpdateInfo {
 
 #[tauri::command]
 pub async fn check_update(current_version: String, installer_type: String) -> Result<UpdateInfo, String> {
-    let url = format!("https://api.github.com/repos/{}/releases/latest", GITHUB_REPO);
+    let url = update_release_url();
     let response = http_client()
         .get(&url)
         .header("Accept", "application/vnd.github+json")

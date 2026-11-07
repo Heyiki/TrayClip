@@ -6,6 +6,8 @@ dist/
 dist-website/
 website/qa/
 src-tauri/target/
+src-tauri/ocr-engine/target/
+scripts/**/__pycache__/
 
 # IDE
 .vscode/

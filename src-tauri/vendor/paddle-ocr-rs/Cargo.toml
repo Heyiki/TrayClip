@@ -1,0 +1,24 @@
+[package]
+name = "paddle-ocr-rs"
+version = "0.6.1"
+edition = "2024"
+license = "Apache-2.0"
+repository = "https://github.com/mg-chao/paddle-ocr-rs"
+description = "PaddleOCR ONNX inference with application-selected image formats"
+
+[dependencies]
+serde_json = "1"
+serde = { version = "1", features = ["derive"] }
+imageproc = { version = "0.25", default-features = false, features = ["rayon"] }
+ndarray = "0.16"
+ort = { version = "=2.0.0-rc.10", default-features = false, features = ["ndarray"] }
+geo-types = "0.7"
+geo-clipper = "0.9"
+clipper-sys = "0.8"
+thiserror = "2"
+image = { version = "0.25", default-features = false }
+
+[features]
+default = ["download-binaries", "copy-dylibs", "ort/default"]
+download-binaries = ["ort/download-binaries"]
+copy-dylibs = ["ort/copy-dylibs"]

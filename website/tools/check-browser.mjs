@@ -63,7 +63,10 @@ try {
             assert.equal(overflowing, false, `Overflow at ${width}`);
             assert.equal(await page.locator(".asset-link").count(), 4);
             assert.equal(await page.locator("img").evaluateAll((images) => images.every((image) => image.complete && image.naturalWidth > 0)), true);
-            assert.equal(await page.locator('a[href*="qaydt20250317"]').count(), 0);
+            const repositoryLinks = await page.locator('a[href^="https://github.com/"]')
+                .evaluateAll((links) => links.map((link) => link.href));
+            assert.ok(repositoryLinks.length > 0);
+            assert.ok(repositoryLinks.every((url) => url === REPOSITORY || url.startsWith(`${REPOSITORY}/`)));
             await page.screenshot({ path: new URL(`../qa/home-${width}.png`, import.meta.url).pathname.slice(1), fullPage: true });
             await installation.locator("summary").click();
         }

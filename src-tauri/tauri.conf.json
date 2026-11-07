@@ -70,6 +70,7 @@
     "windows": {
       "nsis": {
         "languages": ["English", "SimpChinese"],
+        "installerHooks": "windows/hooks.nsh",
         "installerIcon": "icons/icon.ico",
         "uninstallerIcon": "icons/icon.ico"
       }

@@ -19,7 +19,7 @@ async function main() {
             const boot = `<script type="module">
         import { mockIPC, mockWindows } from '/node_modules/@tauri-apps/api/mocks.js';
         import { FALLBACK_BOOTSTRAP } from '/src/lib/constants.ts';
-        window.testUpdate = { has_update: false, latest_version: '0.2.13', body: '', download_url: 'https://github.com/Heyiki/TrayClip/releases' };
+        window.testUpdate = { has_update: false, latest_version: '0.2.13', body: '', download_url: 'https://github.com/ExampleOrg/ClipboardFork/releases' };
         window.calls = [];
         mockWindows('main');
         mockIPC((cmd, args) => {
@@ -85,7 +85,7 @@ async function main() {
         console.log("Release refresh passed");
         assert.equal(await page.evaluate(() => window.calls.filter(c => c.cmd === "check_update").length), callsBefore + 1);
         const link = page.getByRole("link", { name: "前往下载", exact: true });
-        assert.equal(await link.getAttribute("href"), "https://github.com/Heyiki/TrayClip/releases");
+        assert.equal(await link.getAttribute("href"), "https://github.com/ExampleOrg/ClipboardFork/releases");
         const box = await link.boundingBox();
         assert.ok(box && box.x >= 0 && box.y >= 0 && box.x + box.width <= 400 && box.y + box.height <= 500);
         if (process.env.UI_SCREENSHOT) await page.screenshot({ path: process.env.UI_SCREENSHOT });
@@ -120,6 +120,8 @@ async function main() {
         await page.getByRole("button", { name: "设置", exact: true }).click();
         await page.getByRole("menuitem", { name: "关于", exact: true }).click();
         await page.getByRole("heading", { name: "关于 TrayClip", exact: true }).waitFor();
+        assert.equal(await page.getByRole("link", { name: "https://github.com/Heyiki/TrayClip", exact: true }).getAttribute("href"),
+            "https://github.com/Heyiki/TrayClip");
         assert.equal(await page.getByRole("button", { name: /检查更新|查看更新/ }).count(), 1);
         const calls = await page.evaluate(() => window.calls);
         assert.ok(calls.filter(c => c.cmd === "check_update").every(c => c.args.currentVersion === "0.2.13" && c.args.installerType === "exe"));
