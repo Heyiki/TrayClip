@@ -1,0 +1,10 @@
+{
+  "version": "0.1.0",
+  "release_tag": "v0.3.2",
+  "manifests": {
+    "aarch64-apple-darwin": "0e437d43ddbc220e5a94ef3ac9820f5303f800983fb23002572b6d8cb5766100",
+    "x86_64-apple-darwin": "73acfb37a53cfefcd0ffd2dabfb69487e5fd1f9f38f67f7fee64b81d7bbea51e",
+    "x86_64-pc-windows-msvc": "bbda0d9121e64e875ae73c3b1c226576ff9573d519b7418e63fa02bcd3a60df9",
+    "x86_64-unknown-linux-gnu": "d3499ce7af85cda16e95b6213f0ff4b7ac017f4af400cc6ceaa7cbce8dbc0149"
+  }
+}

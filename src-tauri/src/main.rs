@@ -548,6 +548,7 @@ fn main() {
             commands::allow_image_preview,
             ocr::get_ocr_status,
             ocr::install_ocr,
+            ocr::cancel_ocr_install,
             ocr::recognize_clip_image,
             commands::pin_toggle,
             commands::save_group,

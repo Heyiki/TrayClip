@@ -95,6 +95,20 @@ pub fn installed(dir: &Path, manifest: &Manifest) -> bool {
     manifest.files.iter().all(|file| file_matches(&dir.join(&file.name), file.size, &file.sha256))
 }
 
+pub fn prune_other_versions(root: &Path, manifest: &Manifest) -> anyhow::Result<()> {
+    if !installed(&manifest.directory(root), manifest) { bail!("Cannot clean engines before a verified installation"); }
+    let engines = root.join("engines");
+    let Ok(versions) = std::fs::read_dir(&engines) else { return Ok(()) };
+    for version in versions {
+        let version = version?;
+        if !version.file_type()?.is_dir() || version.file_name() == std::ffi::OsStr::new(&manifest.version) {
+            continue;
+        }
+        std::fs::remove_dir_all(version.path())?;
+    }
+    Ok(())
+}
+
 pub fn install_archive(root: &Path, manifest: &Manifest, path: &Path, target: &str) -> anyhow::Result<PathBuf> {
     manifest.validate(target)?;
     if !file_matches(path, manifest.archive_size, &manifest.archive_sha256) {
@@ -198,6 +212,48 @@ mod tests {
     }
 
     #[test]
+    fn new_app_release_reuses_engine_only_when_packaged_files_are_unchanged() {
+        let (root, manifest, zip) = fixture(&[("trayclip-ocr.exe", b"abc")]);
+        let destination = install_archive(root.path(), &manifest, &zip, &manifest.target).unwrap();
+        let mut next_release = manifest.clone();
+        next_release.url = manifest.url.replace("/v1/", "/v2/");
+        assert!(installed(&destination, &next_release), "A release URL change alone must not invalidate the engine");
+        next_release.files[0].sha256 = format!("{:x}", Sha256::digest(b"abd"));
+        assert_eq!(next_release.directory(root.path()), destination);
+        assert!(!installed(&destination, &next_release), "Rebuilt files with the same engine version still require reinstallation");
+    }
+
+    #[test]
+    fn successful_install_prunes_other_engine_versions_but_keeps_models() {
+        let (root, manifest, zip) = fixture(&[("trayclip-ocr.exe", b"abc")]);
+        let old = root.path().join("engines/old/x86_64-pc-windows-msvc");
+        std::fs::create_dir_all(&old).unwrap();
+        std::fs::write(old.join("trayclip-ocr.exe"), b"old").unwrap();
+        let models = root.path().join("rapidocr-1.3.24");
+        std::fs::create_dir_all(&models).unwrap();
+        std::fs::write(models.join("model.onnx"), b"keep").unwrap();
+
+        install_archive(root.path(), &manifest, &zip, &manifest.target).unwrap();
+        prune_other_versions(root.path(), &manifest).unwrap();
+
+        assert!(!old.exists());
+        assert_eq!(std::fs::read(models.join("model.onnx")).unwrap(), b"keep");
+    }
+
+    #[test]
+    fn failed_install_preserves_other_engine_versions() {
+        let (root, manifest, zip) = fixture(&[("trayclip-ocr.exe", b"abc")]);
+        let old = root.path().join("engines/old/x86_64-pc-windows-msvc");
+        std::fs::create_dir_all(&old).unwrap();
+        std::fs::write(old.join("trayclip-ocr.exe"), b"old").unwrap();
+        let mut invalid = manifest.clone();
+        invalid.archive_sha256 = "0".repeat(64);
+
+        assert!(install_archive(root.path(), &invalid, &zip, &manifest.target).is_err());
+        assert!(old.exists());
+    }
+
+    #[test]
     fn rejects_unsafe_unexpected_missing_and_corrupt_archive_entries() {
         for entries in [
             vec![("../escape", b"abc".as_slice())],
@@ -222,6 +278,19 @@ mod tests {
         manifest.archive_sha256 = "0".repeat(64);
         assert!(install_archive(root.path(), &manifest, &zip, &manifest.target).is_err());
         assert_eq!(std::fs::read(dir.join("trayclip-ocr.exe")).unwrap(), b"abc");
+    }
+
+    #[test]
+    fn downgrade_keeps_the_required_version_instead_of_the_highest_version() {
+        let (root, mut manifest, zip) = fixture(&[("trayclip-ocr.exe", b"abc")]);
+        manifest.version = "9.0.0".into();
+        let newer = install_archive(root.path(), &manifest, &zip, &manifest.target).unwrap();
+        manifest.version = "0.1.0".into();
+        let compatible = install_archive(root.path(), &manifest, &zip, &manifest.target).unwrap();
+        assert!(newer.exists(), "Keep the old engine until the installation completes");
+        prune_other_versions(root.path(), &manifest).unwrap();
+        assert!(!newer.exists());
+        assert!(installed(&compatible, &manifest));
     }
 
     #[test]

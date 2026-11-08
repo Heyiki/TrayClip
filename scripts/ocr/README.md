@@ -30,9 +30,11 @@ ad-hoc signing, matching the application; this is not notarization or a guarante
 of Gatekeeper acceptance. Linux packages accept ordinary system C/C++ runtimes
 but reject missing non-system dependencies.
 
-The release workflow packages the engine before the application, embeds the
-manifest, and uploads both to the same draft GitHub Release. Do not publish a
-draft unless every application's referenced engine ZIP is present.
+Application releases download the original ZIP and manifest pinned in
+`config/ocr-engine.json`. The manifest SHA-256 is pinned as well; a missing or
+changed asset fails the build instead of silently rebuilding the same version.
+The initial pin reuses the four existing `v0.3.2` engine packages.
+No engine is rebuilt or uploaded during ordinary application releases.
 Engine download URLs and the application's update check use the build-time
 `github_repository` in `config/distribution.json` (default: `Heyiki/TrayClip`).
 Packaging does not infer the repository from a local Git remote or the Actions
@@ -41,9 +43,16 @@ that configuration.
 No artifact is uploaded by local packaging. A locally generated GitHub URL does
 not mean that artifact has been published.
 
-Bump `ocr-engine/Cargo.toml`'s engine version when changing its implementation
-or native dependencies. Unchanged versions with matching files are reused even
-if the next application release points at a different GitHub asset URL.
+Bump `ocr-engine/Cargo.toml`'s engine version when changing its implementation,
+protocol, native dependencies, packaging or notices. Run the manual **Release OCR
+Engine** workflow before changing the pin. It creates an `ocr-v<version>` draft
+prerelease, signs macOS helpers before hashing and never overwrites assets.
+Review all four ZIPs/manifests, publish that prerelease, then update the version,
+release tag and manifest SHA-256 values in `config/ocr-engine.json` before releasing
+the application. Keep engine releases as prereleases so they do not become the
+application's latest stable update. A failed engine run leaves a draft for manual
+inspection; remove only that incomplete unpublished draft before retrying.
+Existing pinned releases must remain available, including for application downgrades.
 
 ## Development
 
@@ -56,6 +65,16 @@ The engine ZIP import does not contain models. Missing models still download
 from pinned official ModelScope URLs; existing valid models are never downloaded
 again. Installed engines live in `ocr/engines/<version>/<target>/` and models
 remain in `ocr/rapidocr-1.3.24/` under the existing application data root.
+Closing the dialog leaves an active download running. **Cancel download** aborts
+network waits, removes incomplete temporary files and waits for the installation
+job to finish before offering import/retry. Verification and atomic installation
+are not forcibly interrupted. Completed valid components are retained.
+
+After all required components are ready, other engine version directories are
+removed; models are not touched. The retained version is the current application's
+compatible version, not the numerically highest version. An application downgrade
+can therefore require installing its older compatible engine again. Failed or
+cancelled installs do not prune previous engine versions.
 
 Run tests:
 

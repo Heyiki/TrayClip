@@ -65,6 +65,8 @@ export const zh = {
   ocrDownloading: "正在下载 OCR 引擎...",
   ocrDownloadingModels: "正在下载 OCR 模型...",
   ocrVerifying: "正在校验并安装...",
+  ocrCancelDownload: "取消下载",
+  ocrCancelling: "正在取消...",
   ocrImport: "导入引擎包",
   ocrBrowserDownload: "浏览器下载",
   ocrEngine: "引擎",

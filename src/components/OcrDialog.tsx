@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Check, Copy, Download, ExternalLink, FolderOpen, LoaderCircle, RotateCcw } from "lucide-react";
+import { Check, Copy, Download, ExternalLink, FolderOpen, LoaderCircle, RotateCcw, X } from "lucide-react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { getOcrStatus, installOcr, recognizeClipImage, type OcrProgress, type OcrStatus } from "@/lib/api";
+import { cancelOcrInstall, getOcrStatus, installOcr, isOcrInstalling, recognizeClipImage, type OcrProgress, type OcrStatus } from "@/lib/api";
 import { useTranslation } from "@/lib/i18n";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -21,6 +21,7 @@ export function OcrDialog({ clipId, imagePath, onClose }: OcrDialogProps) {
     const [copied, setCopied] = useState(false);
     const [status, setStatus] = useState<OcrStatus | null>(null);
     const [progress, setProgress] = useState<OcrProgress | null>(null);
+    const [cancelling, setCancelling] = useState(false);
     const active = useRef(true);
     const busy = useRef(false);
 
@@ -45,24 +46,7 @@ export function OcrDialog({ clipId, imagePath, onClose }: OcrDialogProps) {
         }
     }, [clipId, imagePath]);
 
-    useEffect(() => {
-        active.current = true;
-        let cancelled = false;
-        void getOcrStatus().then((next) => {
-            if (cancelled) return;
-            setStatus(next);
-            if (next.engine_ready && next.models_ready) void run();
-            else setPhase("download");
-        }).catch((reason) => {
-            if (!cancelled) {
-                setError(String(reason));
-                setPhase("error");
-            }
-        });
-        return () => { cancelled = true; active.current = false; };
-    }, [run]);
-
-    const install = async (offline: boolean) => {
+    const install = useCallback(async (offline: boolean) => {
         if (busy.current) return;
         busy.current = true;
         setError("");
@@ -77,7 +61,7 @@ export function OcrDialog({ clipId, imagePath, onClose }: OcrDialogProps) {
             installed = true;
         } catch (reason) {
             if (active.current) {
-                setError(String(reason));
+                setError(String(reason).includes("OCR download cancelled") ? "" : String(reason));
                 setPhase("download");
                 try { setStatus(await getOcrStatus()); } catch { /* Keep the previous status for retry. */ }
             }
@@ -85,7 +69,28 @@ export function OcrDialog({ clipId, imagePath, onClose }: OcrDialogProps) {
             busy.current = false;
         }
         if (installed && active.current) void run();
-    };
+    }, [run]);
+
+    useEffect(() => {
+        active.current = true;
+        let cancelled = false;
+        if (isOcrInstalling()) {
+            void install(false);
+        } else {
+            void getOcrStatus().then((next) => {
+                if (cancelled) return;
+                setStatus(next);
+                if (next.engine_ready && next.models_ready) void run();
+                else setPhase("download");
+            }).catch((reason) => {
+                if (!cancelled) {
+                    setError(String(reason));
+                    setPhase("error");
+                }
+            });
+        }
+        return () => { cancelled = true; active.current = false; };
+    }, [install, run]);
 
     const copy = async () => {
         try {
@@ -104,6 +109,17 @@ export function OcrDialog({ clipId, imagePath, onClose }: OcrDialogProps) {
             await openUrl(status.engine_url);
         } catch (reason) {
             if (active.current) setError(String(reason));
+        }
+    };
+
+    const cancelDownload = async () => {
+        setCancelling(true);
+        try {
+            await cancelOcrInstall();
+        } catch (reason) {
+            if (active.current) setError(String(reason));
+        } finally {
+            if (active.current) setCancelling(false);
         }
     };
 
@@ -134,6 +150,11 @@ export function OcrDialog({ clipId, imagePath, onClose }: OcrDialogProps) {
                                     {progress.total ? ` / ${formatBytes(progress.total)}` : ""}</p>
                                 {progress.total ? <progress className="h-1.5 w-full" max={progress.total} value={progress.downloaded} /> : null}
                             </>
+                        ) : null}
+                        {phase === "installing" && progress && progress.phase !== "verifying" ? (
+                            <Button size="sm" variant="outline" disabled={cancelling} onClick={() => void cancelDownload()}>
+                                <X className="size-4" />{cancelling ? t.ocrCancelling : t.ocrCancelDownload}
+                            </Button>
                         ) : null}
                     </div>
                 ) : phase === "download" ? (

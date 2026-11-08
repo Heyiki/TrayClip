@@ -106,27 +106,10 @@ jobs:
             exit 1
           fi
 
-      - name: Build separate OCR engine
-        run: cargo build --locked --release --manifest-path src-tauri/ocr-engine/Cargo.toml --target-dir src-tauri/target/ocr-engine --target ${{ matrix.target }}
-
-      - name: Sign macOS OCR engine before hashing
-        if: runner.os == 'macOS'
-        run: codesign --force --sign - --timestamp=none src-tauri/target/ocr-engine/${{ matrix.target }}/release/trayclip-ocr
-
-      - name: Package and embed pinned OCR engine manifest
-        shell: bash
+      - name: Reuse and verify immutable OCR release
         env:
-          TARGET: ${{ matrix.target }}
-        run: |
-          set -euo pipefail
-          executable="src-tauri/target/ocr-engine/$TARGET/release/trayclip-ocr"
-          if [[ "$RUNNER_OS" == "Windows" ]]; then executable="$executable.exe"; fi
-          engine_version=$(python -c "import tomllib; print(tomllib.load(open('src-tauri/ocr-engine/Cargo.toml', 'rb'))['package']['version'])")
-          "$executable" --self-test
-          python scripts/ocr/collect-notices.py --target "$TARGET" --output src-tauri/target/ocr-dist/THIRD-PARTY-NOTICES.txt
-          python scripts/ocr/package-engine.py --executable "$executable" --target "$TARGET" --version "$engine_version" --tag "$GITHUB_REF_NAME" --license src-tauri/target/ocr-dist/THIRD-PARTY-NOTICES.txt --output src-tauri/target/ocr-dist
-          manifest_path=$(python -c "import os; from pathlib import Path; print(Path('src-tauri/target/ocr-dist', 'ocr-engine-' + os.environ['TARGET'] + '.json').resolve(strict=True))")
-          echo "TRAYCLIP_OCR_MANIFEST=$manifest_path" >> "$GITHUB_ENV"
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python scripts/ocr/reuse-engine.py --target ${{ matrix.target }} --output src-tauri/target/ocr-dist
 
       - name: Verify Windows installer icon
         if: matrix.platform == 'windows-latest'
@@ -152,11 +135,3 @@ jobs:
           releaseDraft: true
           prerelease: false
           args: --target ${{ matrix.target }} ${{ matrix.args }}
-
-      - name: Upload OCR engine alongside the application
-        shell: bash
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TARGET: ${{ matrix.target }}
-        run: |
-          gh release upload "$GITHUB_REF_NAME" src-tauri/target/ocr-dist/*-"$TARGET".zip src-tauri/target/ocr-dist/ocr-engine-"$TARGET".json --clobber

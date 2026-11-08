@@ -1,0 +1,88 @@
+name: Release OCR Engine
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  prepare:
+    runs-on: ubuntu-22.04
+    outputs:
+      tag: ${{ steps.release.outputs.tag }}
+      version: ${{ steps.release.outputs.version }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+      - name: Create a new engine draft without overwriting published assets
+        id: release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          repository=$(python3 scripts/distribution.py)
+          [[ "${GITHUB_REPOSITORY,,}" == "${repository,,}" ]]
+          version=$(python3 -c "import tomllib; print(tomllib.load(open('src-tauri/ocr-engine/Cargo.toml', 'rb'))['package']['version'])")
+          pinned=$(python3 -c "import json; print(json.load(open('config/ocr-engine.json'))['version'])")
+          if [[ "$version" == "$pinned" ]]; then
+            echo "This version is already pinned. Bump the engine version before building new assets."
+            exit 1
+          fi
+          tag="ocr-v$version"
+          if gh release view "$tag" --repo "$repository" >/dev/null 2>&1; then
+            echo "Engine release already exists. Bump the engine version; never overwrite it."
+            exit 1
+          fi
+          gh release create "$tag" --repo "$repository" --target "$GITHUB_SHA" --draft --prerelease --title "OCR engine $version" --notes "Pinned optional OCR engine assets. Not an application update."
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: prepare
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: windows-latest
+            target: x86_64-pc-windows-msvc
+          - platform: macos-latest
+            target: aarch64-apple-darwin
+          - platform: macos-latest
+            target: x86_64-apple-darwin
+          - platform: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@v1
+        with:
+          toolchain: stable
+          targets: ${{ matrix.target }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+      - uses: ilammy/msvc-dev-cmd@v1
+        if: runner.os == 'Windows'
+      - name: Build separate engine
+        run: cargo build --locked --release --manifest-path src-tauri/ocr-engine/Cargo.toml --target-dir src-tauri/target/ocr-engine --target ${{ matrix.target }}
+      - name: Sign macOS engine before hashing
+        if: runner.os == 'macOS'
+        run: codesign --force --sign - --timestamp=none src-tauri/target/ocr-engine/${{ matrix.target }}/release/trayclip-ocr
+      - name: Package and upload new engine
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TARGET: ${{ matrix.target }}
+          ENGINE_VERSION: ${{ needs.prepare.outputs.version }}
+          ENGINE_TAG: ${{ needs.prepare.outputs.tag }}
+        run: |
+          set -euo pipefail
+          executable="src-tauri/target/ocr-engine/$TARGET/release/trayclip-ocr"
+          if [[ "$RUNNER_OS" == "Windows" ]]; then executable="$executable.exe"; fi
+          "$executable" --self-test
+          python scripts/ocr/collect-notices.py --target "$TARGET" --output src-tauri/target/ocr-dist/THIRD-PARTY-NOTICES.txt
+          python scripts/ocr/package-engine.py --executable "$executable" --target "$TARGET" --version "$ENGINE_VERSION" --tag "$ENGINE_TAG" --license src-tauri/target/ocr-dist/THIRD-PARTY-NOTICES.txt --output src-tauri/target/ocr-dist
+          gh release upload "$ENGINE_TAG" src-tauri/target/ocr-dist/*-"$TARGET".zip src-tauri/target/ocr-dist/ocr-engine-"$TARGET".json

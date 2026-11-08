@@ -7,9 +7,41 @@ import unittest
 import zipfile
 
 SPEC = importlib.util.spec_from_file_location("package_engine", Path(__file__).with_name("package-engine.py"))
+REUSE_SPEC = importlib.util.spec_from_file_location("reuse_engine", Path(__file__).with_name("reuse-engine.py"))
 
 
 class PackageTests(unittest.TestCase):
+    def test_reuses_exact_published_manifest_and_rejects_replaced_assets(self):
+        module = importlib.util.module_from_spec(SPEC)
+        SPEC.loader.exec_module(module)
+        reuse = importlib.util.module_from_spec(REUSE_SPEC)
+        REUSE_SPEC.loader.exec_module(reuse)
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            executable = root / "trayclip-ocr.exe"
+            executable.write_bytes(b"engine")
+            config = root / "distribution.json"
+            config.write_text('{"github_repository":"Heyiki/TrayClip"}', encoding="utf-8")
+            module.DISTRIBUTION_CONFIG = config
+            target = "x86_64-pc-windows-msvc"
+            manifest, archive = module.package(executable, [], root / "out",
+                "0.1.0", target, "v0.3.2", [])
+            pin = {"version": "0.1.0", "release_tag": "v0.3.2",
+                "manifests": {target: hashlib.sha256(manifest.read_bytes()).hexdigest()}}
+            original = manifest.read_bytes()
+            self.assertEqual(reuse.verify(root / "out", pin, target, "Heyiki/TrayClip"), manifest.resolve())
+            self.assertEqual(manifest.read_bytes(), original, "Reuse must not rewrite the manifest")
+            manifest.write_bytes(original + b"\n")
+            with self.assertRaisesRegex(ValueError, "manifest changed"):
+                reuse.verify(root / "out", pin, target, "Heyiki/TrayClip")
+            manifest.write_bytes(original)
+            archive.write_bytes(b"broken")
+            with self.assertRaisesRegex(ValueError, "archive failed"):
+                reuse.verify(root / "out", pin, target, "Heyiki/TrayClip")
+            archive.unlink()
+            with self.assertRaises(FileNotFoundError):
+                reuse.verify(root / "out", pin, target, "Heyiki/TrayClip")
+
     def test_distribution_config_changes_engine_url_without_using_git_remote(self):
         module = importlib.util.module_from_spec(SPEC)
         SPEC.loader.exec_module(module)

@@ -1,4 +1,4 @@
-use std::io::{Read, Write};
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -8,6 +8,7 @@ use serde::Serialize;
 use sha2::{Digest, Sha256};
 use tauri::{Manager, State};
 use tauri::ipc::Channel;
+use tokio::sync::watch;
 
 use crate::{app_state::AppState, db, models::ClipContentType};
 
@@ -16,6 +17,16 @@ mod engine;
 mod process;
 
 static OCR_JOB: Mutex<()> = Mutex::new(());
+static OCR_CANCEL: Mutex<Option<watch::Sender<bool>>> = Mutex::new(None);
+const CANCELLED: &str = "OCR download cancelled";
+
+struct InstallCancellation;
+
+impl Drop for InstallCancellation {
+    fn drop(&mut self) {
+        *OCR_CANCEL.lock() = None;
+    }
+}
 const MAX_MODEL_BYTES: u64 = 16 * 1024 * 1024;
 use protocol::{Request, PROTOCOL, MAX_IMAGE_BYTES, MODEL_NAMES};
 
@@ -101,64 +112,76 @@ fn models_ready(dir: &Path) -> bool {
     MODELS.iter().all(|model| engine::file_matches(&dir.join(model.name), model.size, model.sha256))
 }
 
-fn http_client() -> anyhow::Result<reqwest::blocking::Client> {
-    Ok(reqwest::blocking::Client::builder()
+fn http_client() -> anyhow::Result<reqwest::Client> {
+    Ok(reqwest::Client::builder()
         .user_agent(concat!("TrayClip/", env!("CARGO_PKG_VERSION")))
         .connect_timeout(Duration::from_secs(15))
         .timeout(Duration::from_secs(300))
         .build()?)
 }
 
-fn install_models(dir: &Path, progress: &dyn Fn(Progress)) -> anyhow::Result<()> {
+fn install_models(dir: &Path, progress: &dyn Fn(Progress), cancel: &mut watch::Receiver<bool>) -> anyhow::Result<()> {
     std::fs::create_dir_all(dir).context("Cannot create OCR model directory")?;
     let client = http_client()?;
     for model in MODELS {
         let destination = dir.join(model.name);
         if engine::file_matches(&destination, model.size, model.sha256) { continue; }
-        download_file(&client, model.url, &destination, model.sha256, MAX_MODEL_BYTES, "models", progress)
+        download_file(&client, model.url, &destination, model.sha256, MAX_MODEL_BYTES, "models", progress, cancel)
             .with_context(|| format!("Failed to download OCR model {}", model.name))?;
     }
     Ok(())
 }
 
 fn download_file(
-    client: &reqwest::blocking::Client,
+    client: &reqwest::Client,
     url: &str,
     destination: &Path,
     sha256: &str,
     limit: u64,
     phase: &'static str,
     progress: &dyn Fn(Progress),
+    cancel: &mut watch::Receiver<bool>,
 ) -> anyhow::Result<()> {
-    let mut response = client.get(url).send()?.error_for_status()?;
-    if response.content_length().is_some_and(|length| length > limit) {
-        bail!("OCR download exceeds size limit");
-    }
-    let mut staged = tempfile::NamedTempFile::new_in(destination.parent().context("Missing model directory")?)?;
-    let total = response.content_length();
-    let name = destination.file_name().context("Missing download filename")?.to_string_lossy().into_owned();
-    let mut report = Progress { phase, name, downloaded: 0, total };
-    progress(report.clone());
-    let mut buffer = [0u8; 64 * 1024];
-    let mut hash = Sha256::new();
-    let mut last_report = std::time::Instant::now();
-    loop {
-        let count = response.read(&mut buffer)?;
-        if count == 0 { break; }
-        report.downloaded += count as u64;
-        if report.downloaded > limit { bail!("OCR download exceeds size limit"); }
-        staged.write_all(&buffer[..count])?;
-        hash.update(&buffer[..count]);
-        if last_report.elapsed() >= Duration::from_millis(100) {
-            progress(report.clone());
-            last_report = std::time::Instant::now();
+    tauri::async_runtime::block_on(async {
+        if *cancel.borrow() { bail!(CANCELLED); }
+        let name = destination.file_name().context("Missing download filename")?.to_string_lossy().into_owned();
+        let mut report = Progress { phase, name, downloaded: 0, total: None };
+        progress(report.clone());
+        let mut response = tokio::select! {
+            biased;
+            _ = cancel.changed() => bail!(CANCELLED),
+            response = client.get(url).send() => response?.error_for_status()?,
+        };
+        if response.content_length().is_some_and(|length| length > limit) {
+            bail!("OCR download exceeds size limit");
         }
-    }
-    staged.flush()?;
-    if format!("{:x}", hash.finalize()) != sha256 { bail!("OCR download failed SHA-256 verification"); }
-    staged.persist(destination).map_err(|error| error.error)?;
-    progress(report);
-    Ok(())
+        let mut staged = tempfile::NamedTempFile::new_in(destination.parent().context("Missing model directory")?)?;
+        report.total = response.content_length();
+        progress(report.clone());
+        let mut hash = Sha256::new();
+        let mut last_report = std::time::Instant::now();
+        loop {
+            let chunk = tokio::select! {
+                biased;
+                _ = cancel.changed() => bail!(CANCELLED),
+                chunk = response.chunk() => chunk?,
+            };
+            let Some(chunk) = chunk else { break };
+            report.downloaded += chunk.len() as u64;
+            if report.downloaded > limit { bail!("OCR download exceeds size limit"); }
+            staged.write_all(&chunk)?;
+            hash.update(&chunk);
+            if last_report.elapsed() >= Duration::from_millis(100) {
+                progress(report.clone());
+                last_report = std::time::Instant::now();
+            }
+        }
+        staged.flush()?;
+        if format!("{:x}", hash.finalize()) != sha256 { bail!("OCR download failed SHA-256 verification"); }
+        staged.persist(destination).map_err(|error| error.error)?;
+        progress(report);
+        Ok(())
+    })
 }
 
 fn status(root: &Path) -> OcrStatus {
@@ -198,6 +221,9 @@ pub async fn install_ocr(
     let root = ocr_root(&state);
     tauri::async_runtime::spawn_blocking(move || -> anyhow::Result<()> {
         let _job = OCR_JOB.try_lock().context("Another OCR request is running")?;
+        let (sender, mut cancel) = watch::channel(false);
+        *OCR_CANCEL.lock() = Some(sender);
+        let _cancellation = InstallCancellation;
         let manifest = engine::manifest()?;
         std::fs::create_dir_all(&root)?;
         let report = |progress| { let _ = on_progress.send(progress); };
@@ -208,13 +234,22 @@ pub async fn install_ocr(
             let temporary = tempfile::tempdir_in(&root)?;
             let archive = temporary.path().join("engine.zip");
             download_file(&http_client()?, &manifest.url, &archive, &manifest.archive_sha256,
-                engine::MAX_ARCHIVE_BYTES, "engine", &report)?;
+                engine::MAX_ARCHIVE_BYTES, "engine", &report, &mut cancel)?;
             report(Progress { phase: "verifying", name: String::new(), downloaded: 0, total: None });
             engine::install_archive(&root, &manifest, &archive, env!("TRAYCLIP_TARGET"))?;
         }
-        install_models(&root.join("rapidocr-1.3.24"), &report)?;
+        install_models(&root.join("rapidocr-1.3.24"), &report, &mut cancel)?;
+        if *cancel.borrow() { bail!(CANCELLED); }
+        engine::prune_other_versions(&root, &manifest)?;
         Ok(())
     }).await.map_err(|error| error.to_string())?.map_err(|error| format!("{error:#}"))
+}
+
+#[tauri::command]
+pub fn cancel_ocr_install() {
+    if let Some(cancel) = OCR_CANCEL.lock().as_ref() {
+        let _ = cancel.send(true);
+    }
 }
 
 #[tauri::command]
@@ -255,6 +290,46 @@ pub async fn recognize_clip_image(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Read;
+
+    #[test]
+    fn cancellation_interrupts_stalled_headers_and_body_without_changing_files() {
+        for headers in [false, true] {
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            let url = format!("http://{}/model", listener.local_addr().unwrap());
+            let (accepted, waiting) = std::sync::mpsc::channel();
+            let (release, finish) = std::sync::mpsc::channel();
+            let server = std::thread::spawn(move || {
+                let (mut stream, _) = listener.accept().unwrap();
+                let mut request = [0; 4096];
+                stream.read(&mut request).unwrap();
+                if headers {
+                    stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 3\r\n\r\na").unwrap();
+                }
+                accepted.send(()).unwrap();
+                finish.recv_timeout(Duration::from_secs(10)).unwrap();
+            });
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("model.onnx");
+            std::fs::write(&path, b"previous").unwrap();
+            let client = reqwest::Client::builder().no_proxy().build().unwrap();
+            let (sender, mut cancel) = watch::channel(false);
+            let cancellation = std::thread::spawn(move || {
+                waiting.recv_timeout(Duration::from_secs(5)).unwrap();
+                std::thread::sleep(Duration::from_millis(100));
+                sender.send(true).unwrap();
+            });
+            let started = std::time::Instant::now();
+            let result = download_file(&client, &url, &path, "", 3, "models", &|_| {}, &mut cancel);
+            release.send(()).unwrap();
+            server.join().unwrap();
+            cancellation.join().unwrap();
+            assert!(result.unwrap_err().to_string().contains(CANCELLED));
+            assert!(started.elapsed() < Duration::from_secs(2));
+            assert_eq!(std::fs::read(&path).unwrap(), b"previous");
+            assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
+        }
+    }
 
     fn model_server(body: &'static [u8]) -> (String, std::thread::JoinHandle<()>) {
         use std::net::TcpListener;
@@ -276,8 +351,9 @@ mod tests {
         let path = dir.path().join("model.onnx");
         std::fs::write(&path, b"broken").unwrap();
         let (url, server) = model_server(b"abc");
-        let client = reqwest::blocking::Client::builder().no_proxy().build().unwrap();
-        download_file(&client, &url, &path, "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad", 3, "models", &|_| {}).unwrap();
+        let client = reqwest::Client::builder().no_proxy().build().unwrap();
+        let (_sender, mut cancel) = watch::channel(false);
+        download_file(&client, &url, &path, "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad", 3, "models", &|_| {}, &mut cancel).unwrap();
         server.join().unwrap();
         assert_eq!(std::fs::read(path).unwrap(), b"abc");
     }
@@ -289,8 +365,9 @@ mod tests {
             let path = dir.path().join("model.onnx");
             std::fs::write(&path, b"previous").unwrap();
             let (url, server) = model_server(body);
-            let client = reqwest::blocking::Client::builder().no_proxy().build().unwrap();
-            assert!(download_file(&client, &url, &path, "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad", limit, "models", &|_| {}).is_err());
+            let client = reqwest::Client::builder().no_proxy().build().unwrap();
+            let (_sender, mut cancel) = watch::channel(false);
+            assert!(download_file(&client, &url, &path, "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad", limit, "models", &|_| {}, &mut cancel).is_err());
             server.join().unwrap();
             assert_eq!(std::fs::read(&path).unwrap(), b"previous");
             assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
@@ -317,14 +394,15 @@ mod tests {
         let engine_dir = engine::install_archive(temporary.path(), &manifest, Path::new(&zip), env!("TRAYCLIP_TARGET")).unwrap();
         let models = std::env::var_os("TRAYCLIP_TEST_MODEL_DIR").map(PathBuf::from)
             .unwrap_or_else(|| temporary.path().join("models"));
+        let (_sender, mut cancel) = watch::channel(false);
         install_models(&models, &|progress| {
             if progress.total == Some(progress.downloaded) {
                 println!("{}: {} bytes", progress.name, progress.downloaded);
             }
-        }).unwrap();
+        }, &mut cancel).unwrap();
         assert!(models_ready(&models));
         let reports = std::cell::Cell::new(0);
-        install_models(&models, &|_| reports.set(reports.get() + 1)).unwrap();
+        install_models(&models, &|_| reports.set(reports.get() + 1), &mut cancel).unwrap();
         assert_eq!(reports.get(), 0, "Valid cached models must not be downloaded again");
         let screenshot = root.join("../docs/ui-qa/list-400-light.png");
         let request = Request { protocol: PROTOCOL, image_path: std::fs::canonicalize(screenshot).unwrap(),

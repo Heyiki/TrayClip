@@ -32,10 +32,35 @@ export interface OcrProgress {
   total: number | null;
 }
 export const getOcrStatus = () => invoke<OcrStatus>("get_ocr_status");
+let ocrInstallPromise: Promise<void> | null = null;
+let ocrInstallProgress: OcrProgress | null = null;
+let reportOcrProgress: ((progress: OcrProgress) => void) | null = null;
+export const isOcrInstalling = () => ocrInstallPromise !== null;
+export const cancelOcrInstall = async () => {
+  const installation = ocrInstallPromise;
+  if (!installation) return;
+  await invoke<void>("cancel_ocr_install");
+  // Wait for backend cleanup and the job lock before enabling import/retry.
+  await installation.catch(() => {});
+};
 export const installOcr = (archivePath: string | null, onProgress: (progress: OcrProgress) => void) => {
+  // A reopened dialog follows the existing job instead of starting another IPC request.
+  reportOcrProgress = onProgress;
+  if (ocrInstallPromise) {
+    if (ocrInstallProgress) onProgress(ocrInstallProgress);
+    return ocrInstallPromise;
+  }
   const channel = new Channel<OcrProgress>();
-  channel.onmessage = onProgress;
-  return invoke<void>("install_ocr", { archivePath, onProgress: channel });
+  channel.onmessage = (progress) => {
+    ocrInstallProgress = progress;
+    reportOcrProgress?.(progress);
+  };
+  ocrInstallPromise = invoke<void>("install_ocr", { archivePath, onProgress: channel }).finally(() => {
+    ocrInstallPromise = null;
+    ocrInstallProgress = null;
+    reportOcrProgress = null;
+  });
+  return ocrInstallPromise;
 };
 export const recognizeClipImage = (clipId: number, imagePath: string) =>
     invoke<string>("recognize_clip_image", { clipId, imagePath });
